@@ -1,0 +1,208 @@
+services:
+  wiki-web:
+    image: wiki-web:latest
+    container_name: wiki-web
+    build:
+      context: ../../wiki-web
+      dockerfile: Dockerfile
+      args:
+        # 说明：前端浏览器代码只能访问宿主机开放的 Web 端口；聊天由后端 /api/chat 受控代理处理。
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3000/wiki-api}"
+        NEXT_PUBLIC_CHATBOT_EMBED_ID: "${NEXT_PUBLIC_CHATBOT_EMBED_ID:-}"
+        NEXT_PUBLIC_CHATBOT_USERNAME: "${NEXT_PUBLIC_CHATBOT_USERNAME:-}"
+        NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME: "${NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME:-}"
+        NEXT_PUBLIC_CHATBOT_GREETING: "${NEXT_PUBLIC_CHATBOT_GREETING:-}"
+        NEXT_PUBLIC_CHATBOT_PLACEHOLDER: "${NEXT_PUBLIC_CHATBOT_PLACEHOLDER:-}"
+        NEXT_PUBLIC_CHATBOT_DEFAULT_MESSAGES: "${NEXT_PUBLIC_CHATBOT_DEFAULT_MESSAGES:-}"
+        NEXT_PUBLIC_CHATBOT_PROMPT: "${NEXT_PUBLIC_CHATBOT_PROMPT:-}"
+        NEXT_PUBLIC_CHATBOT_MODEL: "${NEXT_PUBLIC_CHATBOT_MODEL:-}"
+        NEXT_PUBLIC_CHATBOT_TEMPERATURE: "${NEXT_PUBLIC_CHATBOT_TEMPERATURE:-}"
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      # 说明：运行时也保留同样配置，供 Next.js 服务端路由和组件读取。
+      BACKEND_API_URL: "http://wiki-backend:8000"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3000/wiki-api}"
+      NEXT_PUBLIC_CHATBOT_EMBED_ID: "${NEXT_PUBLIC_CHATBOT_EMBED_ID:-}"
+      NEXT_PUBLIC_CHATBOT_USERNAME: "${NEXT_PUBLIC_CHATBOT_USERNAME:-}"
+      NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME: "${NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME:-}"
+      NEXT_PUBLIC_CHATBOT_GREETING: "${NEXT_PUBLIC_CHATBOT_GREETING:-}"
+      NEXT_PUBLIC_CHATBOT_PLACEHOLDER: "${NEXT_PUBLIC_CHATBOT_PLACEHOLDER:-}"
+      NEXT_PUBLIC_CHATBOT_DEFAULT_MESSAGES: "${NEXT_PUBLIC_CHATBOT_DEFAULT_MESSAGES:-}"
+      NEXT_PUBLIC_CHATBOT_PROMPT: "${NEXT_PUBLIC_CHATBOT_PROMPT:-}"
+      NEXT_PUBLIC_CHATBOT_MODEL: "${NEXT_PUBLIC_CHATBOT_MODEL:-}"
+      NEXT_PUBLIC_CHATBOT_TEMPERATURE: "${NEXT_PUBLIC_CHATBOT_TEMPERATURE:-}"
+    ports:
+      # 说明：整套系统唯一映射到宿主机的端口是 Wiki Web。
+      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    depends_on:
+      wiki-backend:
+        condition: service_healthy
+      anythingllm:
+        condition: service_started
+    networks:
+      - wiki-internal
+    restart: unless-stopped
+    healthcheck:
+      # 说明：直接检查容器内 Next.js HTTP 服务，避免只看进程存在造成误判。
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  wiki-backend:
+    image: wiki-backend:latest
+    container_name: wiki-backend
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      # 说明：容器间通过服务名访问，避免后端依赖宿主机回环地址。
+      DB_HOST: postgres
+      DB_PORT: 5432
+      S3_ENDPOINT_URL: http://rustfs:9000
+      ANYTHINGLLM_API_URL: http://anythingllm:3001
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      anythingllm:
+        condition: service_started
+    networks:
+      - wiki-internal
+    restart: unless-stopped
+    healthcheck:
+      # 说明：后端镜像不额外安装 curl，直接用 Python 标准库检查 FastAPI 健康接口。
+      test: ["CMD", "uv", "run", "--no-sync", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  anythingllm:
+    image: mintplexlabs/anythingllm
+    container_name: anythingllm
+    depends_on:
+      volume-permission-helper:
+        condition: service_completed_successfully
+    expose:
+      - "3001"
+    ports:
+      - "3001:3001"
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      # 说明：AnythingLLM 只在内部网络提供服务，外部访问通过 wiki-web 代理。
+      - STORAGE_DIR=/app/server/storage
+      - JWT_SECRET="duhakeer"
+      - VECTOR_DB=lancedb
+      - WHISPER_PROVIDER=local
+      - DEEPSEEK_API_KEY=sk-49c361b13a4b4ffdba2a0d16d0ae949a
+      - LLM_PROVIDER=deepseek
+      - DEEPSEEK_MODEL_PREF=deepseek-v4-flash
+    volumes:
+      - ./storage:/app/server/storage
+      - .env:/app/server/.env
+    networks:
+      - wiki-internal
+    restart: always
+
+  postgres:
+    image: postgres:18
+    container_name: postgres
+    expose:
+      - "5432"
+    environment:
+      # 说明：数据库仅供 Docker 内部服务访问，不再映射到宿主机端口。
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-duhakeer}
+      - POSTGRES_DB=${DB_NAME:-postgres}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    networks:
+      - wiki-internal
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs-server
+    depends_on:
+      volume-permission-helper:
+        condition: service_completed_successfully
+    security_opt:
+      - "no-new-privileges:true"
+    expose:
+      - "9000"
+      - "9001"
+    environment:
+      # 说明：RustFS S3 API 和控制台仅暴露在 Docker 内部网络。
+      - RUSTFS_VOLUMES=/data/rustfs0
+      - RUSTFS_ADDRESS=0.0.0.0:9000
+      - RUSTFS_CONSOLE_ADDRESS=0.0.0.0:9001
+      - RUSTFS_CONSOLE_ENABLE=true
+      - RUSTFS_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
+      - RUSTFS_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - RUSTFS_OBS_LOGGER_LEVEL=info
+      # 说明：如果不需要启用 RustFS 原生 TLS，请注释掉此行。启用时需挂载证书目录到容器的 /opt/tls。
+      # - RUSTFS_TLS_PATH=/opt/tls
+      - RUSTFS_OBJECT_CACHE_ENABLE=true
+      - RUSTFS_OBJECT_CACHE_TTL_SECS=300
+    volumes:
+      - rustfs_data:/data/rustfs0
+      - rustfs_logs:/app/logs
+    networks:
+      - wiki-internal
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "sh", "-c",
+          "curl -f http://127.0.0.1:9000/health && curl -f http://127.0.0.1:9001/rustfs/console/health"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  volume-permission-helper:
+    image: alpine
+    volumes:
+      - rustfs_data:/data0
+      - rustfs_logs:/logs
+      - ./storage:/storage0
+    command: >
+      sh -c "
+        chown -R 10001:10001 /data0 /logs &&
+        chown -R 1000:1000 /storage0 &&
+        echo 'Volume Permissions fixed' &&
+        exit 0
+      "
+    networks:
+      - wiki-internal
+    restart: "no"
+
+networks:
+  wiki-internal:
+    driver: bridge
+
+volumes:
+  rustfs_data:
+  rustfs_logs:

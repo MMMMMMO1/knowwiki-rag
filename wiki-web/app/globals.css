@@ -1,0 +1,880 @@
+/* ============================================================
+   Wiki Global Styles — DESIGN.md Warm Canvas System
+   ============================================================ */
+
+/* CSS Variables */
+:root {
+  /* Color Palette */
+  --color-primary: #cc785c;
+  --color-primary-hover: #a9583e;
+  --color-primary-container: #e8a55a;
+  --color-primary-fixed: #efe9de;
+  --color-primary-fixed-dim: #e8e0d2;
+
+  --color-background: #faf9f5;
+  --color-surface: #faf9f5;
+  --color-surface-dim: #e8e0d2;
+  --color-surface-bright: #faf9f5;
+  --color-surface-container: #efe9de;
+  --color-surface-container-low: #f5f0e8;
+  --color-surface-container-high: #e8e0d2;
+  --color-surface-container-highest: #ded4c5;
+  --color-surface-container-lowest: #faf9f5;
+
+  --color-on-surface: #141413;
+  --color-on-surface-variant: #3d3d3a;
+  --color-on-background: #141413;
+  --color-outline: #8e8b82;
+  --color-outline-variant: #e6dfd8;
+
+  --color-secondary: #6c6a64;
+  --color-secondary-container: #efe9de;
+  --color-on-secondary-container: #252523;
+
+  --color-inverse-surface: #181715;
+  --color-inverse-on-surface: #faf9f5;
+  --color-brand-text: #141413;
+
+  --color-sidebar: #f5f0e8;
+  --color-sidebar-border: transparent;
+
+  /* Typography */
+  --font-headline: 'Manrope', -apple-system, sans-serif;
+  --font-body: 'Inter', -apple-system, sans-serif;
+
+  /* Sizing */
+  --header-height: 64px;
+  --sidebar-width: 256px;
+  --chat-panel-width: 380px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* Dark mode */
+.dark {
+  --color-primary: #cc785c;
+  --color-primary-hover: #e8a55a;
+  --color-primary-fixed: #252320;
+  --color-background: #181715;
+  --color-surface: #181715;
+  --color-sidebar: #1f1e1b;
+  --color-surface-container-lowest: #181715;
+  --color-surface-container: #252320;
+  --color-surface-container-low: #1f1e1b;
+  --color-surface-container-high: #2f2c28;
+  --color-on-surface: #faf9f5;
+  --color-on-surface-variant: #a09d96;
+  --color-outline: #a09d96;
+  --color-outline-variant: #3a3732;
+  --color-inverse-surface: #faf9f5;
+  --color-inverse-on-surface: #181715;
+  --color-brand-text: #faf9f5;
+}
+
+/* Base Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: var(--font-body);
+  background-color: var(--color-background);
+  color: var(--color-on-surface);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-headline);
+  letter-spacing: 0;
+  color: var(--color-on-surface);
+}
+
+/* Scrollbar — Hide by default, show on hover */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-outline-variant); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-outline); }
+
+/* Selection */
+::selection {
+  background: var(--color-primary-fixed);
+  color: #000a63;
+}
+
+/* ============================================================
+   Ant Design Overrides — match DESIGN.md
+   ============================================================ */
+
+/* Layout */
+.ant-layout {
+  background: var(--color-background) !important;
+}
+
+.ant-layout-header {
+  background: var(--color-surface) !important;
+  border-bottom: none;
+  padding: 0 32px !important;
+  height: var(--header-height) !important;
+  line-height: var(--header-height) !important;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+}
+
+.ant-layout-sider {
+  background: var(--color-sidebar) !important;
+}
+
+.ant-layout-content {
+  background: var(--color-surface) !important;
+}
+
+/* ============================================================
+   Wiki Desktop Three Column Layout
+   ============================================================ */
+
+.wiki-three-column-shell {
+  width: 100%;
+  height: 100vh;
+  min-width: 1180px;
+  display: grid;
+  grid-template-columns: 280px minmax(520px, 1fr) var(--chat-panel-width);
+  background: var(--color-background);
+}
+
+.wiki-left-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-sidebar);
+  border-right: 1px solid var(--color-outline-variant);
+}
+
+.wiki-left-panel__brand {
+  height: 76px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  color: var(--color-brand-text);
+  font-family: var(--font-headline);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0;
+  border-bottom: none;
+}
+
+.wiki-left-panel__nav {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wiki-left-panel__footer {
+  flex: 0 0 auto;
+  padding: 16px;
+}
+
+.wiki-theme-toggle {
+  width: 100%;
+  height: 40px !important;
+  justify-content: flex-start;
+  border-radius: 8px !important;
+  color: var(--color-on-surface-variant) !important;
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+
+.wiki-theme-toggle:hover {
+  background: var(--color-surface-container) !important;
+  color: var(--color-on-surface) !important;
+}
+
+.wiki-center-panel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-background);
+}
+
+.wiki-center-panel__search {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  padding: 16px 40px;
+  background: color-mix(in srgb, var(--color-background) 92%, transparent);
+  border-bottom: none;
+  backdrop-filter: blur(14px);
+}
+
+.wiki-center-panel__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--color-background) !important;
+}
+
+.wiki-chat-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-container-lowest);
+  border-left: 1px solid var(--color-outline-variant);
+}
+
+.wiki-chat-panel__header {
+  height: 76px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 18px 0 20px;
+  border-bottom: none;
+}
+
+.wiki-chat-panel__eyebrow {
+  color: var(--color-outline);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+.wiki-chat-panel__header h2 {
+  margin: 2px 0 0;
+  color: var(--color-on-surface);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.wiki-chat-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wiki-chat-panel__history {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 16px;
+}
+
+.wiki-chat-panel__center,
+.wiki-chat-panel__empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  color: var(--color-outline);
+  text-align: center;
+}
+
+.wiki-chat-panel__empty p {
+  max-width: 280px;
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  line-height: 1.7;
+}
+
+.wiki-chat-panel__suggestions {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.wiki-chat-panel__suggestions button {
+  width: 100%;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 10px;
+  background: var(--color-surface-container-low);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  padding: 9px 12px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.wiki-chat-panel__suggestions button:hover {
+  background: var(--color-surface-container);
+  border-color: var(--color-primary);
+}
+
+.wiki-chat-panel__suggestions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.wiki-chat-panel__composer {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  border-top: none;
+  background: var(--color-surface-container-lowest);
+}
+
+.wiki-chat-panel__composer .ant-input {
+  background: var(--color-surface-container-low) !important;
+  border-color: var(--color-outline-variant) !important;
+  color: var(--color-on-surface) !important;
+  font-family: var(--font-body);
+  box-shadow: none !important;
+}
+
+.wiki-chat-panel__composer .ant-input::placeholder {
+  color: var(--color-outline) !important;
+}
+
+.wiki-chat-panel__composer .ant-input:focus {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 3px rgba(204, 120, 92, 0.12) !important;
+}
+
+.wiki-chat-panel__composer .ant-btn-primary {
+  color: #ffffff !important;
+}
+
+.wiki-chat-panel__composer .ant-btn-primary .anticon {
+  color: #ffffff !important;
+}
+
+.wiki-chat-message {
+  display: flex;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.wiki-chat-message--user {
+  justify-content: flex-end;
+}
+
+.wiki-chat-message--assistant {
+  justify-content: flex-start;
+}
+
+.wiki-chat-message__bubble {
+  min-width: 0;
+  max-width: 88%;
+  border-radius: 16px;
+  padding: 11px 13px;
+  box-shadow: var(--shadow-sm);
+  font-size: 13.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.wiki-chat-message__bubble * {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wiki-chat-message--user .wiki-chat-message__bubble {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-bottom-right-radius: 5px;
+}
+
+.wiki-chat-message--assistant .wiki-chat-message__bubble {
+  background: var(--color-surface-container-low);
+  color: var(--color-on-surface);
+  border: 1px solid var(--color-outline-variant);
+  border-bottom-left-radius: 5px;
+}
+
+.wiki-chat-message__bubble p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wiki-chat-message__bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.wiki-chat-message__bubble pre,
+.wiki-chat-message__bubble code {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wiki-chat-message__bubble ul,
+.wiki-chat-message__bubble ol {
+  padding-left: 18px;
+}
+
+.wiki-chat-message__bubble table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.wiki-chat-think {
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-container) 72%, transparent);
+  color: var(--color-on-surface-variant);
+}
+
+.wiki-chat-think summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: var(--color-outline);
+  font-size: 12px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.wiki-chat-think__content {
+  padding: 0 10px 10px;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.wiki-chat-think__content p {
+  margin-bottom: 8px;
+}
+
+.wiki-learning-recommendations {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--color-outline-variant) 72%, transparent);
+}
+
+.wiki-learning-recommendations__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wiki-learning-recommendations__heading .anticon {
+  color: var(--color-primary);
+  font-size: 13px;
+}
+
+.wiki-learning-recommendations__list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wiki-learning-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-container-lowest) 78%, var(--color-primary) 6%);
+}
+
+.wiki-learning-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.wiki-learning-card h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-on-surface);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wiki-learning-card__level {
+  flex: 0 0 auto;
+  max-width: 76px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-learning-card p {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wiki-learning-card__keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.wiki-learning-card__keywords span {
+  max-width: 100%;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--color-surface-container);
+  color: var(--color-outline);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Menu overrides */
+.wiki-sidebar-menu.ant-menu {
+  background: transparent !important;
+  border-inline-end: none !important;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.wiki-sidebar-menu .ant-menu-item {
+  height: 36px;
+  line-height: 36px;
+  margin: 2px 8px;
+  border-radius: 8px;
+  padding-left: 16px !important;
+  color: var(--color-on-surface-variant);
+  font-size: 13.5px;
+}
+
+.wiki-sidebar-menu .ant-menu-item:hover {
+  background: var(--color-surface-container-high) !important;
+  color: var(--color-on-surface) !important;
+}
+
+.wiki-sidebar-menu .ant-menu-item-selected {
+  background: var(--color-surface-container) !important;
+  color: var(--color-primary) !important;
+  font-weight: 700;
+  border-left: none;
+  border-radius: 8px;
+  margin-left: 8px;
+  padding-left: 16px !important;
+}
+
+.wiki-sidebar-menu .ant-menu-submenu-title {
+  height: 36px;
+  line-height: 36px;
+  margin: 2px 8px;
+  border-radius: 8px;
+  color: var(--color-on-surface-variant);
+  font-size: 13.5px;
+  padding-left: 16px !important;
+}
+
+.wiki-sidebar-menu .ant-menu-submenu-title:hover {
+  background: var(--color-surface-container-high) !important;
+  color: var(--color-on-surface) !important;
+}
+
+.wiki-sidebar-menu .ant-menu-sub {
+  background: transparent !important;
+}
+
+/* Input Search */
+.wiki-search.ant-input-affix-wrapper {
+  background: var(--color-surface-container-lowest) !important;
+  border: 1px solid var(--color-outline-variant) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  height: 44px;
+  padding: 0 16px;
+}
+
+.wiki-search.ant-input-affix-wrapper:focus-within {
+  border-color: rgba(204, 120, 92, 0.45) !important;
+  box-shadow: 0 0 0 3px rgba(204, 120, 92, 0.1) !important;
+}
+
+.wiki-search .ant-input {
+  background: transparent !important;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-on-surface) !important;
+}
+
+.wiki-search .ant-input::placeholder {
+  color: var(--color-outline);
+}
+
+/* Breadcrumb */
+.wiki-breadcrumb .ant-breadcrumb-separator {
+  color: var(--color-outline);
+}
+
+.wiki-breadcrumb .ant-breadcrumb-link a {
+  color: var(--color-outline) !important;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+
+.wiki-breadcrumb .ant-breadcrumb-link a:hover {
+  color: var(--color-primary) !important;
+}
+
+.wiki-breadcrumb .ant-breadcrumb-link:last-child {
+  color: var(--color-on-surface);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Button */
+.btn-primary-wiki {
+  background: var(--color-primary) !important;
+  border: none !important;
+  border-radius: 10px !important;
+  font-family: var(--font-headline) !important;
+  font-weight: 700 !important;
+  font-size: 14px !important;
+  height: 38px !important;
+  box-shadow: 0 4px 16px rgba(204, 120, 92, 0.18) !important;
+}
+
+.btn-primary-wiki:hover {
+  opacity: 0.9 !important;
+  box-shadow: 0 4px 20px rgba(204, 120, 92, 0.25) !important;
+}
+
+/* Chatbot Embed */
+#anything-llm-embed-chat-button-container {
+  display: none !important;
+}
+
+#anything-llm-embed-chat-container {
+  z-index: 1600 !important;
+}
+
+@media (max-width: 768px) {
+  #anything-llm-chat {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    height: min(78vh, 720px) !important;
+    max-height: min(78vh, 720px) !important;
+    right: 12px !important;
+    left: auto !important;
+    bottom: 12px !important;
+    margin: 0 !important;
+    border-radius: 24px !important;
+  }
+}
+
+/* Markdown Content Styles */
+.wiki-markdown {
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--color-on-surface);
+}
+
+.wiki-markdown h1 { font-size: 2.25rem; font-weight: 800; margin-bottom: 1rem; margin-top: 2rem; }
+.wiki-markdown h2 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.875rem; margin-top: 2rem; padding-bottom: 0.5rem; }
+.wiki-markdown h3 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.75rem; margin-top: 1.5rem; }
+.wiki-markdown h4 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; margin-top: 1.25rem; }
+
+.wiki-markdown p { margin-bottom: 1rem; }
+
+.wiki-markdown a {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: border-color 0.2s;
+}
+.wiki-markdown a:hover { border-color: var(--color-primary); }
+
+.wiki-markdown code {
+  background: var(--color-surface-container);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 0.875em;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  color: #c0392b;
+}
+
+.wiki-markdown pre {
+  background: var(--color-inverse-surface);
+  border-radius: 12px;
+  padding: 20px 24px;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+
+.wiki-markdown pre code {
+  background: transparent;
+  color: var(--color-inverse-on-surface);
+  padding: 0;
+  font-size: 13.5px;
+}
+
+.wiki-markdown blockquote {
+  margin: 1.5rem 0;
+  padding: 16px 20px;
+  border-left: 4px solid var(--color-primary);
+  background: rgba(204, 120, 92, 0.08);
+  border-radius: 0 8px 8px 0;
+  color: var(--color-on-surface-variant);
+  font-style: italic;
+}
+
+.wiki-markdown ul, .wiki-markdown ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.wiki-markdown li {
+  margin-bottom: 0.375rem;
+}
+
+.wiki-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 14px;
+}
+
+.wiki-markdown th {
+  background: var(--color-surface-container);
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 16px;
+}
+
+.wiki-markdown td {
+  padding: 10px 16px;
+}
+
+.wiki-markdown tr:last-child td {
+  border-bottom: none;
+}
+
+.wiki-markdown img {
+  max-width: 100%;
+  border-radius: 12px;
+  margin: 1rem 0;
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s ease forwards;
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
+/* ============================================================
+   Uppy Dashboard Overrides — match Lexicon design
+   ============================================================ */
+
+.uppy-wrapper .uppy-DashboardItem-status {
+  font-family: var(--font-body) !important;
+}
+/* ============================================================
+   Uppy Dashboard Overrides — match Lexicon design
+   ============================================================ */
+
+.uppy-wrapper .uppy-Dashboard-inner {
+  border-radius: 14px !important;
+  border-color: var(--color-outline-variant) !important;
+  background: var(--color-surface-container-lowest) !important;
+}
+
+.uppy-wrapper .uppy-Dashboard-dropFilesHereHint {
+  border-radius: 14px !important;
+  background: rgba(204, 120, 92, 0.08) !important;
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+  font-family: var(--font-body) !important;
+}
+
+.uppy-wrapper .uppy-Dashboard-AddFiles-title {
+  font-family: var(--font-body) !important;
+  color: var(--color-on-surface) !important;
+}
+
+.uppy-wrapper .uppy-Dashboard-browse {
+  color: var(--color-primary) !important;
+}
+
+.uppy-wrapper .uppy-Dashboard-note {
+  font-family: var(--font-body) !important;
+  color: var(--color-outline) !important;
+}
+
+.uppy-wrapper .uppy-StatusBar-actionBtn--upload {
+  background: var(--color-primary) !important;
+  border-radius: 10px !important;
+  font-family: var(--font-headline) !important;
+  font-weight: 700 !important;
+}
+
+.uppy-wrapper .uppy-StatusBar-actionBtn--upload:hover {
+  background: var(--color-primary-hover) !important;
+}
+
+.uppy-wrapper .uppy-StatusBar {
+  border-radius: 0 0 14px 14px !important;
+}
+
+.uppy-wrapper .uppy-StatusBar-progress {
+  background: var(--color-primary) !important;
+}
+
+.uppy-wrapper .uppy-DashboardItem-name {
+  font-family: var(--font-body) !important;
+}
+
+.uppy-wrapper .uppy-DashboardItem-status {
+  font-family: var(--font-body) !important;
+}

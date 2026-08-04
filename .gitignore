@@ -1,0 +1,39 @@
+# macOS 本地系统文件，避免提交无关元数据
+.DS_Store
+
+# 本地环境变量和敏感配置，避免泄露密钥、Token、数据库密码等信息
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# 依赖目录，体积大且可由锁文件或依赖配置重新安装
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+**/.pytest_cache/
+
+# 前端和后端构建、缓存、运行时产物
+.next/
+**/.next/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+.wiki-runtime/
+
+# 本次仓库合并时保留的旧 Git 元数据备份，不应进入新仓库
+.git-backups/
+
+# 常见日志文件
+*.log
+logs/
+**/logs/

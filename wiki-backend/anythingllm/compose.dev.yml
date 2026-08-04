@@ -1,0 +1,7 @@
+services:
+  anythingllm:
+    ports:
+      # 说明：
+      # 这个端口映射只在 `./start_wiki.sh dev` 或 `./start.sh dev` 时生效，
+      # 用于直接调试 AnythingLLM 管理界面和 API；普通 start 仍保持内部访问。
+      - "${ANYTHINGLLM_BIND_HOST:-127.0.0.1}:${ANYTHINGLLM_PORT:-3001}:3001"

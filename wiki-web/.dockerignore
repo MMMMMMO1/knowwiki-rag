@@ -1,0 +1,7 @@
+# 说明：排除本地依赖、构建产物和缓存，避免把开发机状态带入镜像。
+node_modules
+.next
+npm-debug.log
+.DS_Store
+.env
+.env.local
