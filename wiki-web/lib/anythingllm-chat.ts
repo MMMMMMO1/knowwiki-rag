@@ -268,3 +268,86 @@ function createId() {
         return v.toString(16);
     });
 }
+
+// ── RAG 聊天 ─────────────────────────────────────────────
+
+/**
+ * 调用自研 RAG 后端的流式聊天接口。
+ *
+ * 与 streamAnythingLLMChat 的差异：
+ * 1. 请求体只需要 {message}，不需要 session_id / prompt / model / temperature
+ * 2. SSE 格式为纯文本 token（data: 你好\n\n），而非 JSON 事件
+ * 3. 通过包装 token 为 textResponseChunk 事件，保持 WikiChatPanel 兼容
+ */
+export async function streamRagChat(
+    message: string,
+    onEvent: (event: AnythingLLMStreamEvent) => void,
+    signal?: AbortSignal
+) {
+    const response = await fetch('/api/chat/rag/stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...buildAuthHeaders(),
+        },
+        body: JSON.stringify({ message }),
+        signal,
+    });
+
+    if (!response.ok) {
+        await emitServerError(response, onEvent);
+        return;
+    }
+
+    if (!response.body) {
+        onEvent({
+            type: 'abort',
+            textResponse: null,
+            sources: [],
+            close: true,
+            error: '服务端没有返回可读取的流式响应',
+        });
+        return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split(/\n\n|\r\n\r\n/);
+        buffer = events.pop() || '';
+
+        for (const eventText of events) {
+            const data = eventText
+                .split(/\r?\n/)
+                .filter((line) => line.startsWith('data:'))
+                .map((line) => line.replace(/^data:\s?/, ''))
+                .join('\n')
+                .trim();
+
+            if (!data) continue;
+            if (data === '[DONE]') {
+                onEvent({ type: 'textResponse', textResponse: '', sources: [], close: true, error: null });
+                return;
+            }
+            if (data.startsWith('[ERROR]')) {
+                onEvent({ type: 'abort', textResponse: null, sources: [], close: true, error: data });
+                return;
+            }
+
+            // RAG 的 SSE 是纯文本 token，包装为 textResponseChunk 事件
+            onEvent({
+                type: 'textResponseChunk',
+                textResponse: data,
+                sources: [],
+                close: false,
+                error: null,
+            });
+        }
+    }
+}

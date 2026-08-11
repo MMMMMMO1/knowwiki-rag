@@ -20,10 +20,12 @@ RUN pip install --no-cache-dir uv
 # 先复制依赖清单并安装依赖，让后续业务代码变更时能复用依赖缓存。
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
+RUN uv pip install pgvector 'markitdown[all]'
 
 # 说明：
 # 只复制运行 FastAPI 所需的应用代码，测试缓存和本地虚拟环境会被 .dockerignore 排除。
 COPY app ./app
+COPY rag ./rag
 
 EXPOSE 8000
 

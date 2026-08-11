@@ -20,8 +20,19 @@ async def lifespan(app: FastAPI):
     await ensure_bucket_exists()
     
     print("Database and Storage initialized.")
+
+    # Start RAG TaskWorker in background
+    import asyncio
+    from rag.task_worker import TaskWorker
+    worker = TaskWorker()
+    worker_task = asyncio.create_task(worker.run())
+    print("TaskWorker started.")
+
     yield
+
     # Shutdown
+    worker.stop()
+    await worker_task
     print("Shutting down...")
 
 

@@ -12,6 +12,7 @@ import {
     getOrCreateAnythingLLMSessionId,
     resetAnythingLLMSession,
     streamAnythingLLMChat,
+    streamRagChat,
 } from '@/lib/anythingllm-chat';
 
 const { TextArea } = Input;
@@ -116,9 +117,7 @@ export default function WikiChatPanel() {
         setError('');
 
         try {
-            await streamAnythingLLMChat(
-                config,
-                sessionId,
+            await streamRagChat(
                 message,
                 (streamEvent) => {
                     applyStreamEvent(streamEvent, assistantMessage.id);

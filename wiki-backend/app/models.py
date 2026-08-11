@@ -1,5 +1,7 @@
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, backref
+from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
 
@@ -120,3 +122,48 @@ class ChatLog(Base):
 
     def __repr__(self) -> str:
         return f"<ChatLog(id={self.id}, user_id={self.user_id}, role='{self.role}')>"
+
+
+# ── RAG 向量存储模型 ──────────────────────────────────────────────
+
+
+class RagDocument(Base):
+    """RAG 文档处理记录 —— 跟踪哪些 Wiki 文件已被 RAG 流水线处理。"""
+
+    __tablename__ = "rag_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_id = Column(Integer, ForeignKey("files.id", ondelete="SET NULL"), nullable=True, index=True)
+    doc_id = Column(String(36), unique=True, nullable=False, index=True)
+    title = Column(String(500), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    chunk_count = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    file = relationship("File")
+    chunks = relationship("RagChunk", back_populates="document", cascade="all, delete-orphan", lazy="selectin")
+
+    def __repr__(self) -> str:
+        return f"<RagDocument(id={self.id}, title='{self.title}', status='{self.status}')>"
+
+
+class RagChunk(Base):
+    """RAG 文本块 —— 存储切分后的文本片段及其向量。"""
+
+    __tablename__ = "rag_chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("rag_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_id = Column(String(36), unique=True, nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    embedding = Column(Vector(1024), nullable=True)
+    metadata_ = Column("metadata", JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    document = relationship("RagDocument", back_populates="chunks")
+
+    def __repr__(self) -> str:
+        return f"<RagChunk(id={self.id}, chunk_id='{self.chunk_id[:8]}...')>"

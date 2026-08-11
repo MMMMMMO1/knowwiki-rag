@@ -53,6 +53,20 @@ class Settings(BaseSettings):
     ANYTHINGLLM_WORKSPACE_SLUG: str = ""
     ANYTHINGLLM_SYNC_MAX_RETRIES: int = 3
 
+   
+    # RAG (Retrieval-Augmented Generation) settings
+    LLM_API_URL: str = "https://api.deepseek.com/v1"
+    LLM_API_KEY: str = ""
+    LLM_MODEL: str = "deepseek-v4-flash"
+    EMBEDDING_API_URL: str =  "https://ws-9a2hqxduvazwrik2.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    VECTOR_DIM: int = 1024  # text-embedding-v3 输出维度
+    CHUNK_SIZE: int = 500
+    CHUNK_OVERLAP: int = 50
+    TOP_K: int = 5
+    RAG_SYNC_MAX_RETRIES: int = 3
+    SYSTEM_PROMPT: str = ""
     class Config:
         env_file = ROOT_ENV_FILE
         env_file_encoding = "utf-8"
