@@ -113,6 +113,8 @@ export default function WikiChatPanel() {
 
         try {
             await streamRagChat(
+                config,
+                sessionId,
                 message,
                 (streamEvent) => {
                     applyStreamEvent(streamEvent, assistantMessage.id);

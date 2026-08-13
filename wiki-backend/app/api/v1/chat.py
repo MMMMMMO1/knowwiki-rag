@@ -52,7 +52,13 @@ async def chat_stream(
             from rag.chat_service import ChatService
             service = ChatService()
 
-            async for token in service.ask_stream(request.message, db):
+            async for token in service.ask_stream(
+                request.message,
+                db,
+                prompt=request.prompt,
+                model=request.model,
+                temperature=request.temperature,
+            ):
                 accumulated.append(token)
                 yield f"data: {json.dumps({'type': 'textResponseChunk', 'textResponse': token, 'sources': [], 'close': False})}\n\n"
 

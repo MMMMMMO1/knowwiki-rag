@@ -31,8 +31,19 @@ class ChatService:
         self,
         question: str,
         db: AsyncSession,
+        prompt: str | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
     ) -> AsyncGenerator[str, None]:
-        """流式 RAG 查询：检索 → 组装 prompt → LLM 流式回答。"""
+        """流式 RAG 查询：检索 → 组装 prompt → LLM 流式回答。
+
+        Args:
+            question: 用户自然语言问题。
+            db: 数据库会话。
+            prompt: 自定义 system prompt（为空则用默认）。
+            model: 自定义 LLM 模型名（为空则用配置默认）。
+            temperature: 生成温度（为空则用默认 0.7）。
+        """
         self.last_sources = []
 
         if not question.strip():
@@ -61,26 +72,33 @@ class ChatService:
             for r in results
         ]
 
-        # 2. 组装 prompt
+        # 2. 组装 prompt（传入自定义 system prompt）
         context = retriever.format_context(results)
-        builder = PromptBuilder()
+        builder = PromptBuilder(system_prompt=prompt)
         messages = builder.build(question=question, context=context)
 
-        # 3. 调 LLM
-        llm = LLM()
-        async for token in llm.chat_stream(messages):
+        # 3. 调 LLM（传入自定义 model 与 temperature）
+        llm = LLM(model=model)
+        temp = temperature if temperature is not None else 0.7
+        async for token in llm.chat_stream(messages, temperature=temp):
             yield token
 
     async def ask(
         self,
         question: str,
         db: AsyncSession,
+        prompt: str | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
     ) -> str:
         """非流式 RAG 查询，返回完整回答。
 
         Args:
             question: 用户自然语言问题。
             db: 数据库会话。
+            prompt: 自定义 system prompt（为空则用默认）。
+            model: 自定义 LLM 模型名（为空则用配置默认）。
+            temperature: 生成温度（为空则用默认 0.7）。
 
         Returns:
             LLM 的完整回答文本。
@@ -97,8 +115,9 @@ class ChatService:
             return "抱歉，知识库中没有找到相关信息。"
 
         context = retriever.format_context(results)
-        builder = PromptBuilder()
+        builder = PromptBuilder(system_prompt=prompt)
         messages = builder.build(question=question, context=context)
 
-        llm = LLM()
-        return await llm.chat(messages)
+        llm = LLM(model=model)
+        temp = temperature if temperature is not None else 0.7
+        return await llm.chat(messages, temperature=temp)

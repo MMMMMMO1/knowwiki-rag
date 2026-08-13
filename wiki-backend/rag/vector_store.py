@@ -120,15 +120,8 @@ class VectorStore:
         await self.db.flush()
 
     async def delete_by_file_id(self, file_id: int) -> None:
-        """按 Wiki 文件 ID 删除对应 RAG 索引。"""
-        doc = await self.get_document_by_file_id(file_id)
-        if doc:
-            await self.db.execute(
-                text("DELETE FROM rag_chunks WHERE document_id = :doc_id"),
-                {"doc_id": doc.id},
-            )
-            await self.db.delete(doc)
-            await self.db.flush()
+        """按 Wiki 文件 ID 删除对应 RAG 索引（兼容同一 file_id 有多条历史记录）。"""
+        await self.delete_by_file_ids([file_id])
 
     async def delete_by_file_ids(self, file_ids: list[int]) -> None:
         """批量按 file_id 删除 RAG 索引。"""

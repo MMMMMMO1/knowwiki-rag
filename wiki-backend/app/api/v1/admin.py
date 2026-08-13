@@ -236,53 +236,57 @@ async def delete_item(
     Note: Deleting a folder will also delete all its children.
     """
     from app.core.storage import delete_file as s3_delete_file, delete_directory as s3_delete_directory
-    
+    from rag.vector_store import VectorStore
+
     if item_type == "folder":
         folder = await get_folder_by_id(db, item_id)
         if not folder:
             raise HTTPException(status_code=404, detail="Folder not found")
-        
+
         deleted_path = folder.full_path
 
-        # 删除文件夹前先列出子文件
-        for file_obj in await _list_files_under_folder(db, folder.full_path):
-            pass  # 子文件由下面的批量删除处理
-        
+        # 1. 删除前先收集子文件 file_ids，并清理 RAG 索引。
+        #    必须在删文件之前清理：rag_documents.file_id 外键是 ON DELETE SET NULL，
+        #    若先删文件，file_id 会被置为 NULL，就再也找不到对应的 RAG 记录了。
+        child_files = await _list_files_under_folder(db, deleted_path)
+        child_file_ids = [f.id for f in child_files]
+        rag_store = VectorStore(db)
+        await rag_store.delete_by_file_ids(child_file_ids)
+
+        # 2. 删除 S3 目录
         if delete_physical:
             try:
                 await s3_delete_directory(deleted_path)
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"S3 Delete failed: {e}")
-                
+
+        # 3. 删除 folder（ORM cascade 同时删除子文件）
         await delete_folder(db, folder)
-        
+
     elif item_type == "file":
         file_obj = await get_file_by_id(db, item_id)
         if not file_obj:
             raise HTTPException(status_code=404, detail="File not found")
-            
+
         deleted_path = file_obj.full_path
-        
+
+        # 1. 先清理 RAG 索引（同样必须在删文件前）
+        rag_store = VectorStore(db)
+        await rag_store.delete_by_file_id(item_id)
+
+        # 2. 删除 S3 文件
         if delete_physical and file_obj.storage_key:
             try:
                 await s3_delete_file(file_obj.storage_key)
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"S3 Delete failed: {e}")
-                
+
+        # 3. 删除文件记录
         await delete_file_record(db, file_obj)
-        
+
     else:
         raise HTTPException(status_code=400, detail="item_type must be folder or file")
 
-    # 同步清理 RAG 索引
-    from rag.vector_store import VectorStore
-    rag_store = VectorStore(db)
-    if item_type == "folder":
-        file_objs = await _list_files_under_folder(db, deleted_path)
-        await rag_store.delete_by_file_ids([f.id for f in file_objs])
-    else:
-        await rag_store.delete_by_file_id(item_id)
-            
     return {
         "success": True,
         "message": f"Deleted successfully: {deleted_path}. RAG index cleaned.",

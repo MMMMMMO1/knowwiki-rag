@@ -124,7 +124,13 @@ class RagDocument(Base):
 
 
 class RagChunk(Base):
-    """RAG 文本块 —— 存储切分后的文本片段及其向量。"""
+    """RAG 文本块 —— 存储切分后的文本片段及其向量。
+
+    注意：embedding 列固定为 1024 维（Vector(1024)）。
+    这与配置项 VECTOR_DIM=1024 和默认 embedding 模型 text-embedding-v3 绑定。
+    若未来更换 embedding 模型，必须同步修改这里的 Vector 维度、
+    VECTOR_DIM 配置，并重建 rag_chunks 表（pgvector 列维度不可直接变更）。
+    """
 
     __tablename__ = "rag_chunks"
 

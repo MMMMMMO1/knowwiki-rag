@@ -77,9 +77,16 @@ class Embedder:
                     batch_embeddings = sorted(
                         result["data"], key=lambda x: x["index"]
                     )
-                    all_embeddings.extend(
-                        [item["embedding"] for item in batch_embeddings]
-                    )
+                    for item in batch_embeddings:
+                        vec = item["embedding"]
+                        if len(vec) != settings.VECTOR_DIM:
+                            raise RuntimeError(
+                                f"Embedding 维度不匹配: 返回 {len(vec)} 维，"
+                                f"期望 {settings.VECTOR_DIM} 维。"
+                                f"请检查 EMBEDDING_MODEL={self.model} 是否输出 "
+                                f"{settings.VECTOR_DIM} 维向量。"
+                            )
+                        all_embeddings.append(vec)
 
                 except Exception as e:
                     raise RuntimeError(

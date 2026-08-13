@@ -14,14 +14,20 @@ _SEPARATORS = ["\n\n", "\n", "。", " ", ""]
 
 
 def split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
-    """将纯文本递归切分为不超过 chunk_size 的字符串列表。"""
+    """将纯文本递归切分为不超过 chunk_size 的字符串列表。
+
+    保证：
+    - 所有返回的字符串长度都 <= chunk_size。
+    - 分隔符不会被丢失（分隔符附加在片段末尾，最后一个片段除外）。
+    - chunk_overlap > 0 时，相邻 chunk 有重叠字符用于保持上下文。
+    """
     if chunk_overlap >= chunk_size:
         raise ValueError(
             f"chunk_overlap ({chunk_overlap}) 必须小于 chunk_size ({chunk_size})"
         )
 
     # 找第一个能把文本分开的分隔符
-    separator = _SEPARATORS[-1]  # 兜底：逐字符切
+    separator = None
     for sep in _SEPARATORS:
         if sep == "":
             break
@@ -29,45 +35,67 @@ def split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
             separator = sep
             break
 
-    # 用选中的分隔符拆分
-    splits = text.split(separator) if separator else list(text)
+    if separator is None:
+        # 无可用分隔符：逐字符硬切
+        return _hard_cut(text, chunk_size, chunk_overlap)
+
+    # 按分隔符拆分，分隔符附加在片段末尾（最后一个片段除外，避免多出尾部分隔符）
+    parts = text.split(separator)
+    pieces = [p + separator for p in parts[:-1]]
+    if parts[-1]:
+        pieces.append(parts[-1])
 
     chunks: list[str] = []
     current = ""
 
-    for split in splits:
-        piece = split if not separator else split
-        # 如果单段已超过 chunk_size，先硬切该段
+    for piece in pieces:
+        # 超长单段：先保存 current，再硬切该段
         if len(piece) > chunk_size:
-            # 先把 current 存起来
             if current:
                 chunks.append(current)
-            # 硬切超长段
-            for i in range(0, len(piece), chunk_size - chunk_overlap):
-                sub = piece[i:i + chunk_size]
-                chunks.append(sub)
-            current = ""
+                current = ""
+            chunks.extend(_hard_cut(piece, chunk_size, chunk_overlap))
             continue
 
-        if current and len(current) + len(separator) + len(piece) > chunk_size:
-            # 当前块已满，保存并开始新块
-            chunks.append(current)
-            # 如果有 overlap，用当前块末尾作为新块的开头
-            if chunk_overlap > 0:
-                overlap_text = current[-chunk_overlap:]
-                current = overlap_text + separator + piece if separator else overlap_text + piece
+        candidate = current + piece
+
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+
+        # candidate 超长：保存 current，新块以 overlap 前缀开头
+        chunks.append(current)
+        if chunk_overlap > 0 and current:
+            prefix = current[-chunk_overlap:]
+            new_candidate = prefix + piece
+            if len(new_candidate) <= chunk_size:
+                current = new_candidate
             else:
-                current = piece
+                # overlap 前缀 + piece 仍超长：先放能放下的，其余硬切
+                available = chunk_size - len(prefix)
+                if available > 0:
+                    chunks.append(prefix + piece[:available])
+                    chunks.extend(_hard_cut(piece[available:], chunk_size, chunk_overlap))
+                else:
+                    chunks.extend(_hard_cut(piece, chunk_size, chunk_overlap))
+                current = ""
         else:
-            if current:
-                current += separator + piece
-            else:
-                current = piece
+            current = piece
 
     if current:
         chunks.append(current)
 
     return chunks
+
+
+def _hard_cut(s: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    """把字符串硬切为 <= chunk_size 的片段（带 overlap 链）。"""
+    result: list[str] = []
+    step = chunk_size - chunk_overlap if chunk_overlap > 0 else chunk_size
+    step = max(step, 1)
+    for i in range(0, len(s), step):
+        result.append(s[i : i + chunk_size])
+    return result
 
 
 class TextSplitter:
