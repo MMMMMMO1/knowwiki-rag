@@ -21,29 +21,20 @@ from rag.vector_store import VectorStore
 class ChatService:
     """RAG 聊天服务 —— 查询链路编排器。
 
-    用法:
-        service = ChatService()
-        # 流式
-        async for token in service.ask_stream("什么是光合作用？", db):
-            yield token
-        # 非流式
-        answer = await service.ask("什么是光合作用？", db)
+    ask_stream() 除了 yield token，还会把检索到的 sources 存入 self.last_sources。
     """
+
+    def __init__(self):
+        self.last_sources: list[dict] = []
 
     async def ask_stream(
         self,
         question: str,
         db: AsyncSession,
     ) -> AsyncGenerator[str, None]:
-        """流式 RAG 查询：检索 → 组装 prompt → LLM 流式回答。
+        """流式 RAG 查询：检索 → 组装 prompt → LLM 流式回答。"""
+        self.last_sources = []
 
-        Args:
-            question: 用户自然语言问题。
-            db: 数据库会话（由 FastAPI Depends 注入）。
-
-        Yields:
-            LLM 生成的每个文本片段。
-        """
         if not question.strip():
             yield "请输入问题。"
             return
@@ -57,6 +48,18 @@ class ChatService:
         if not results:
             yield "抱歉，知识库中没有找到相关信息。"
             return
+
+        # 记录 sources
+        self.last_sources = [
+            {
+                "chunk_id": r.chunk_id,
+                "text": r.text[:200],
+                "score": r.score,
+                "title": r.metadata.get("title", ""),
+                "file_id": r.metadata.get("file_id"),
+            }
+            for r in results
+        ]
 
         # 2. 组装 prompt
         context = retriever.format_context(results)

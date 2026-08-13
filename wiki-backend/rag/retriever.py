@@ -1,5 +1,5 @@
 """
-检索模块 —— 替代 AnythingLLM 的 performSimilaritySearch。
+检索模块 —— 编排 embedding + 向量检索流程。
 
 编排 Embedder + VectorStore，将用户自然语言问题转换为最相关的 Chunk 列表。
 """

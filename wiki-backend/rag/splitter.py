@@ -1,5 +1,5 @@
 """
-文本切分模块 —— 替代 AnythingLLM 的 TextSplitter。
+文本切分模块 —— 递归按分隔符降级切分长文本为固定大小的块。
 
 将 Document 切分为 Chunk 列表，每个 Chunk 不超过 chunk_size 字符，
 相邻 Chunk 之间有 chunk_overlap 字符的重叠。
@@ -37,6 +37,18 @@ def split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
 
     for split in splits:
         piece = split if not separator else split
+        # 如果单段已超过 chunk_size，先硬切该段
+        if len(piece) > chunk_size:
+            # 先把 current 存起来
+            if current:
+                chunks.append(current)
+            # 硬切超长段
+            for i in range(0, len(piece), chunk_size - chunk_overlap):
+                sub = piece[i:i + chunk_size]
+                chunks.append(sub)
+            current = ""
+            continue
+
         if current and len(current) + len(separator) + len(piece) > chunk_size:
             # 当前块已满，保存并开始新块
             chunks.append(current)

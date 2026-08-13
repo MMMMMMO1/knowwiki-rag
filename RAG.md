@@ -1,7 +1,10 @@
-# RAG 替代 AnythingLLM — 完整教学对话
+# RAG 自研模块设计文档
 
-项目：wiki-main（Wiki 应用，FastAPI + PostgreSQL + S3 + Next.js）
-目标：自研 RAG 模块替代 AnythingLLM
+> **迁移状态**：自研 RAG 已于 2026-08 全面替代 AnythingLLM。AnythingLLM 容器、代码、API 均已被 `wiki-backend/rag/` 模块替代。
+> 本文档保留设计决策和参考对比，供后续维护参考。
+
+项目：wiki-main（Wiki 应用，FastAPI + PostgreSQL pgvector + S3 + Next.js）
+目标：自研 RAG 模块替代 AnythingLLM（已完成）
 日期：2026-08-04 ~ 2026-08-07
 
 ---

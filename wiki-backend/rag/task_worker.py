@@ -77,20 +77,28 @@ class TaskWorker:
                 metadata={"file_id": doc.file_id},
             )
 
-            # 3. 计算 content_hash（去重用）
+            # 3. 空文本检测
+            if not document.content or not document.content.strip():
+                raise ValueError("文档内容为空，无法索引")
+
+            # 4. 计算 content_hash（去重用）
             content_hash = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
             doc.content_hash = content_hash
-            doc.doc_id = document.doc_id
 
-            # 4. 跑流水线（splitter → embedder → vector_store）
+            # 5. 如果同一 file_id 已有旧 chunks，先清理（支持重新上传）
+            store = VectorStore(db)
+            await store.delete_by_document(doc)
+
+            # 6. 跑流水线（splitter → embedder → vector_store）
             splitter = TextSplitter()
             embedder = Embedder()
-            store = VectorStore(db)
 
             chunks = splitter.split(document)
             vectors = await embedder.embed(chunks)
             await store.insert(doc, chunks, vectors)
 
+            # 成功：清除错误信息
+            doc.error_message = None
             await db.commit()
             print(
                 f"[TaskWorker] 完成: {doc.title}, {len(chunks)} chunks"

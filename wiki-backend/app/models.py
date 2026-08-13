@@ -61,33 +61,6 @@ class File(Base):
         return f"<File(id={self.id}, title='{self.title}', storage_key='{self.storage_key}')>"
 
 
-class AnythingLLMDocumentSync(Base):
-    """
-    AnythingLLM 同步记录。
-
-    这张表独立于 files 表保存远端文档名，避免 Wiki 文件删除后丢失
-    AnythingLLM 删除所需的 name/location。
-    """
-    __tablename__ = "anythingllm_document_syncs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    file_id = Column(Integer, ForeignKey("files.id", ondelete="SET NULL"), nullable=True, index=True)
-    full_path = Column(String(500), nullable=False, index=True)
-    storage_key = Column(String(500), nullable=False)
-    title = Column(String(255), nullable=False)
-    content_hash = Column(String(64), nullable=True)
-    anythingllm_name = Column(String(1000), nullable=True)
-    operation = Column(String(32), nullable=False, default="upload", index=True)
-    status = Column(String(32), nullable=False, default="pending_upload", index=True)
-    retry_count = Column(Integer, nullable=False, default=0)
-    last_error = Column(Text, nullable=True)
-    synced_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    file = relationship("File")
-
-
 class User(Base):
     """
     User model for authentication and role-based access.
@@ -107,7 +80,7 @@ class User(Base):
 
 class ChatLog(Base):
     """
-    ChatLog model for storing user chat history with AnythingLLM.
+    ChatLog model for storing user chat history.
     """
     __tablename__ = "chat_logs"
 
@@ -136,7 +109,7 @@ class RagDocument(Base):
     file_id = Column(Integer, ForeignKey("files.id", ondelete="SET NULL"), nullable=True, index=True)
     doc_id = Column(String(36), unique=True, nullable=False, index=True)
     title = Column(String(500), nullable=False)
-    content_hash = Column(String(64), nullable=False)
+    content_hash = Column(String(64), nullable=True)
     status = Column(String(20), nullable=False, default="pending", index=True)
     chunk_count = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)

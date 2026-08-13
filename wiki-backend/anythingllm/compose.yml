@@ -6,10 +6,8 @@ services:
       context: ../../wiki-web
       dockerfile: Dockerfile
       args:
-        # 说明：前端浏览器代码只能访问宿主机开放的 Web 端口；聊天由后端 /api/chat 受控代理处理。
+        # 说明：前端浏览器代码只能访问宿主机开放的 Web 端口；聊天由后端 RAG /api/chat 处理。
         NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3000/wiki-api}"
-        NEXT_PUBLIC_CHATBOT_EMBED_ID: "${NEXT_PUBLIC_CHATBOT_EMBED_ID:-}"
-        NEXT_PUBLIC_CHATBOT_USERNAME: "${NEXT_PUBLIC_CHATBOT_USERNAME:-}"
         NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME: "${NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME:-}"
         NEXT_PUBLIC_CHATBOT_GREETING: "${NEXT_PUBLIC_CHATBOT_GREETING:-}"
         NEXT_PUBLIC_CHATBOT_PLACEHOLDER: "${NEXT_PUBLIC_CHATBOT_PLACEHOLDER:-}"
@@ -21,11 +19,9 @@ services:
       - path: ../../.env
         required: false
     environment:
-      # 说明：运行时也保留同样配置，供 Next.js 服务端路由和组件读取。
+      # 说明：运行时也保留同样配置，供 Next.js 服务端路由和组件读取。RAG 聊天由后端处理。
       BACKEND_API_URL: "http://wiki-backend:8000"
       NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3000/wiki-api}"
-      NEXT_PUBLIC_CHATBOT_EMBED_ID: "${NEXT_PUBLIC_CHATBOT_EMBED_ID:-}"
-      NEXT_PUBLIC_CHATBOT_USERNAME: "${NEXT_PUBLIC_CHATBOT_USERNAME:-}"
       NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME: "${NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME:-}"
       NEXT_PUBLIC_CHATBOT_GREETING: "${NEXT_PUBLIC_CHATBOT_GREETING:-}"
       NEXT_PUBLIC_CHATBOT_PLACEHOLDER: "${NEXT_PUBLIC_CHATBOT_PLACEHOLDER:-}"
@@ -39,8 +35,6 @@ services:
     depends_on:
       wiki-backend:
         condition: service_healthy
-      anythingllm:
-        condition: service_started
     networks:
       - wiki-internal
     restart: unless-stopped
@@ -63,13 +57,12 @@ services:
         required: false
     environment:
       # 说明：容器间通过服务名访问，避免后端依赖宿主机回环地址。
+      # 这两个是 Docker 内部网络的服务名，不是用户配置，必须写死。
       DB_HOST: postgres
       DB_PORT: 5432
       S3_ENDPOINT_URL: http://rustfs:9000
-      ANYTHINGLLM_API_URL: http://anythingllm:3001
-      LLM_API_KEY: sk-49c361b13a4b4ffdba2a0d16d0ae949a
-      EMBEDDING_API_KEY: sk-ws-H.ELYHYXI.58os.MEQCIFRw0lL9xOuBpQL0Y68-horoICPCcb0cMPmr10quqePJAiAqjOULqB6GfUSXg2zJUDzXJAbfT4HwTv5ji1TsuQF1pw
-      EMBEDDING_MODEL: text-embedding-v3
+      # 说明：LLM_API_URL / LLM_API_KEY / EMBEDDING_API_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL
+      # 等所有应用级配置，均通过 env_file 从 ../../.env 读取，不在此处重复定义。
     expose:
       - "8000"
     depends_on:
@@ -77,8 +70,6 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_healthy
-      anythingllm:
-        condition: service_started
     networks:
       - wiki-internal
     restart: unless-stopped
@@ -90,33 +81,7 @@ services:
       retries: 12
       start_period: 30s
 
-  anythingllm:
-    image: mintplexlabs/anythingllm
-    container_name: anythingllm
-    depends_on:
-      volume-permission-helper:
-        condition: service_completed_successfully
-    expose:
-      - "3001"
-    ports:
-      - "3001:3001"
-    cap_add:
-      - SYS_ADMIN
-    environment:
-      # 说明：AnythingLLM 只在内部网络提供服务，外部访问通过 wiki-web 代理。
-      - STORAGE_DIR=/app/server/storage
-      - JWT_SECRET="duhakeer"
-      - VECTOR_DB=lancedb
-      - WHISPER_PROVIDER=local
-      - DEEPSEEK_API_KEY=sk-49c361b13a4b4ffdba2a0d16d0ae949a
-      - LLM_PROVIDER=deepseek
-      - DEEPSEEK_MODEL_PREF=deepseek-v4-flash
-    volumes:
-      - ./storage:/app/server/storage
-      - .env:/app/server/.env
-    networks:
-      - wiki-internal
-    restart: always
+
 
   postgres:
     image: pgvector/pgvector:pg18

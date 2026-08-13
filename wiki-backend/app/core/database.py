@@ -93,6 +93,8 @@ async def init_db():
     from app import models  # noqa: F401
 
     async with engine.begin() as conn:
+        # 确保 pgvector 扩展已启用
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     print("Database tables initialized.")
 

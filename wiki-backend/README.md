@@ -29,7 +29,7 @@ uv sync
 
 ### 2. Configure Environment
 
-后端不再使用 `wiki-backend/.env`。请在仓库根目录从 `.env.example` 创建 `.env`，并按需填写数据库、S3、管理员 token 与 AnythingLLM 同步配置：
+后端不再使用 `wiki-backend/.env`。请在仓库根目录从 `.env.example` 创建 `.env`，并按需填写数据库、S3、管理员 token、LLM 与 Embedding API 配置：
 
 ```bash
 cp ../.env.example ../.env
@@ -48,6 +48,7 @@ uv run uvicorn app.main:app --reload
 | [API Reference](./api.md) | Complete API documentation |
 | [Swagger UI](http://localhost:8000/docs) | Interactive API docs |
 | [ReDoc](http://localhost:8000/redoc) | Alternative API docs |
+| [RAG Design](./RAG.md) | RAG 自研模块设计与迁移说明 |
 
 ## Project Structure
 
@@ -67,5 +68,6 @@ wiki-backend/
 │       ├── database.py   # DB connection
 │       └── security.py   # Auth
 ├── wiki_storage/         # Markdown files
+├── rag/                  # 自研 RAG 文档索引与问答模块
 └── app/core/config.py    # Settings loaded from repository root .env
 ```

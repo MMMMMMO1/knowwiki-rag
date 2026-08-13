@@ -11,19 +11,17 @@ All endpoints require Bearer token authentication.
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File as FastAPIFile, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import verify_admin_token
 from app.crud import get_folder_by_id, get_file_by_id, get_file_by_full_path, get_folder_by_full_path, create_file, delete_folder, delete_file_record, create_folder
 from app.scanner import normalize_slug, normalize_title, extract_sort_order
-from sqlalchemy import select, update, delete, func, desc
-from app.models import User, ChatLog, Folder, File, AnythingLLMDocumentSync
+from sqlalchemy import select, func, desc
+from app.models import User, ChatLog, Folder, File
 from app.core.security import get_password_hash
 from app.schemas import (
-    AnythingLLMSyncStatusResponse,
-    AnythingLLMSyncTriggerResponse,
     UploadResponse,
     FileResponse,
     ErrorResponse,
@@ -37,18 +35,22 @@ from app.schemas import (
     SyncHistoryItem,
     UserResponse,
 )
-from app.anythingllm_sync import (
-    calculate_content_hash,
-    create_upload_sync_record,
-    get_sync_status,
-    list_files_under_folder,
-    list_runnable_sync_ids,
-    mark_file_pending_delete,
-    process_sync_record,
-    process_sync_records,
-)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+async def _list_files_under_folder(db: AsyncSession, folder_full_path: str) -> list:
+    """按 Wiki 路径找出文件夹下所有文件。"""
+    from sqlalchemy import or_
+    result = await db.execute(
+        select(File).where(
+            or_(
+                File.full_path.like(f"{folder_full_path}/%"),
+                File.storage_key.like(f"{folder_full_path}/%"),
+            )
+        )
+    )
+    return list(result.scalars().all())
 
 
 
@@ -102,7 +104,6 @@ async def add_folder(
     responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
 )
 async def upload_file(
-    background_tasks: BackgroundTasks,
     file: UploadFile = FastAPIFile(...),
     folder_id: int | None = Form(None),
     _: str = Depends(verify_admin_token),
@@ -117,7 +118,7 @@ async def upload_file(
     - **folder_id**: Optional parent folder ID
     
     The file will be saved to S3 and a file record will be created.
-    AnythingLLM sync is scheduled asynchronously after the Wiki write succeeds.
+    Knowledge sync is scheduled asynchronously after the Wiki write succeeds.
     """
     # Allowed file extensions
     ALLOWED_EXTENSIONS = {".md", ".html", ".docx", ".txt", ".pdf"}
@@ -191,16 +192,16 @@ async def upload_file(
         sort_order=extract_sort_order(filename),
     )
 
-    sync_record = await create_upload_sync_record(
-        db=db,
-        file_obj=file_node,
-        content_hash=calculate_content_hash(content),
-    )
-    background_tasks.add_task(process_sync_record, sync_record.id)
+    # 创建 RAG 索引任务
+    from rag.ingest_service import IngestService
+    rag_service = IngestService(db)
+    await rag_service.ingest(file_id=file_node.id)
+
+    await db.commit()
     
     return UploadResponse(
         success=True,
-        message=f"File uploaded successfully: {full_path}. AnythingLLM sync scheduled.",
+        message=f"File uploaded successfully: {full_path}. RAG indexing queued.",
         file=FileResponse(
             id=file_node.id,
             folder_id=file_node.folder_id,
@@ -217,7 +218,6 @@ async def upload_file(
     responses={404: {"model": ErrorResponse}},
 )
 async def delete_item(
-    background_tasks: BackgroundTasks,
     item_type: Literal["folder", "file"],
     item_id: int,
     delete_physical: bool = True,
@@ -236,7 +236,6 @@ async def delete_item(
     Note: Deleting a folder will also delete all its children.
     """
     from app.core.storage import delete_file as s3_delete_file, delete_directory as s3_delete_directory
-    sync_ids: list[int] = []
     
     if item_type == "folder":
         folder = await get_folder_by_id(db, item_id)
@@ -245,11 +244,9 @@ async def delete_item(
         
         deleted_path = folder.full_path
 
-        # 删除文件夹前先为其中已同步到 AnythingLLM 的文件保留远端 name。
-        for file_obj in await list_files_under_folder(db, folder.full_path):
-            sync_record = await mark_file_pending_delete(db, file_obj)
-            if sync_record:
-                sync_ids.append(sync_record.id)
+        # 删除文件夹前先列出子文件
+        for file_obj in await _list_files_under_folder(db, folder.full_path):
+            pass  # 子文件由下面的批量删除处理
         
         if delete_physical:
             try:
@@ -265,10 +262,6 @@ async def delete_item(
             raise HTTPException(status_code=404, detail="File not found")
             
         deleted_path = file_obj.full_path
-
-        sync_record = await mark_file_pending_delete(db, file_obj)
-        if sync_record:
-            sync_ids.append(sync_record.id)
         
         if delete_physical and file_obj.storage_key:
             try:
@@ -281,41 +274,82 @@ async def delete_item(
     else:
         raise HTTPException(status_code=400, detail="item_type must be folder or file")
 
-    for sync_id in sync_ids:
-        background_tasks.add_task(process_sync_record, sync_id)
+    # 同步清理 RAG 索引
+    from rag.vector_store import VectorStore
+    rag_store = VectorStore(db)
+    if item_type == "folder":
+        file_objs = await _list_files_under_folder(db, deleted_path)
+        await rag_store.delete_by_file_ids([f.id for f in file_objs])
+    else:
+        await rag_store.delete_by_file_id(item_id)
             
     return {
         "success": True,
-        "message": f"Deleted successfully: {deleted_path}. AnythingLLM delete sync scheduled.",
+        "message": f"Deleted successfully: {deleted_path}. RAG index cleaned.",
         "deleted_path": deleted_path,
         "physical_deleted": delete_physical,
     }
 
 
-@router.get("/anythingllm/status", response_model=AnythingLLMSyncStatusResponse)
-async def anythingllm_status(
+# ============== RAG 知识库状态 ==============
+
+@router.get("/knowledge/status")
+async def rag_knowledge_status(
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
-) -> AnythingLLMSyncStatusResponse:
-    """返回 AnythingLLM 后台同步状态统计。"""
-    status_data = await get_sync_status(db)
-    return AnythingLLMSyncStatusResponse(success=True, **status_data)
+):
+    """返回自研 RAG 索引状态统计。"""
+    from sqlalchemy import func
+    from app.models import RagDocument
 
-
-@router.post("/anythingllm/sync", response_model=AnythingLLMSyncTriggerResponse)
-async def trigger_anythingllm_sync(
-    background_tasks: BackgroundTasks,
-    _: str = Depends(verify_admin_token),
-    db: AsyncSession = Depends(get_db),
-) -> AnythingLLMSyncTriggerResponse:
-    """手动触发 pending/failed 同步记录重试。"""
-    sync_ids = await list_runnable_sync_ids(db)
-    background_tasks.add_task(process_sync_records, sync_ids)
-    return AnythingLLMSyncTriggerResponse(
-        success=True,
-        message=f"Scheduled {len(sync_ids)} AnythingLLM sync records.",
-        scheduled=len(sync_ids),
+    result = await db.execute(
+        select(
+            RagDocument.status,
+            func.count(RagDocument.id).label("count"),
+        ).group_by(RagDocument.status)
     )
+    status_map = {row.status: row.count for row in result.all()}
+
+    # 取最近一条失败信息
+    latest_error_result = await db.execute(
+        select(RagDocument.error_message)
+        .where(RagDocument.status == "failed")
+        .order_by(RagDocument.updated_at.desc())
+        .limit(1)
+    )
+    latest_error = latest_error_result.scalar_one_or_none()
+
+    return {
+        "success": True,
+        "pending": status_map.get("pending", 0),
+        "processing": status_map.get("processing", 0),
+        "completed": status_map.get("completed", 0),
+        "failed": status_map.get("failed", 0),
+        "latest_error": latest_error,
+    }
+
+
+@router.post("/knowledge/sync")
+async def rag_knowledge_sync(
+    _: str = Depends(verify_admin_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """把 failed 或 pending 的 RAG 文档重置为 pending，交给 TaskWorker 重试。"""
+    from app.models import RagDocument
+
+    result = await db.execute(
+        select(RagDocument).where(
+            RagDocument.status.in_(["failed", "pending"])
+        )
+    )
+    docs = result.scalars().all()
+
+    for doc in docs:
+        doc.status = "pending"
+        doc.error_message = None
+
+    await db.commit()
+    return {"success": True, "message": f"Reset {len(docs)} documents to pending."}
 
 
 # ============== Dashboard Statistics ==============
@@ -326,6 +360,7 @@ async def get_dashboard_stats(
     db: AsyncSession = Depends(get_db),
 ) -> DashboardStatsResponse:
     """获取管理员后台的统计数据。"""
+    from app.models import RagDocument
     # 统计文件夹数量
     result = await db.execute(select(func.count(Folder.id)))
     total_folders = result.scalar() or 0
@@ -342,10 +377,10 @@ async def get_dashboard_stats(
     result = await db.execute(select(func.count(func.distinct(ChatLog.session_id))))
     total_conversations = result.scalar() or 0
 
-    # 统计同步失败的任务数量
+    # 统计同步失败的任务数量（RagDocument）
     result = await db.execute(
-        select(func.count(AnythingLLMDocumentSync.id))
-        .filter(AnythingLLMDocumentSync.status == "failed")
+        select(func.count(RagDocument.id))
+        .filter(RagDocument.status == "failed")
     )
     failed_syncs = result.scalar() or 0
 
@@ -515,11 +550,11 @@ async def get_sync_history(
     db: AsyncSession = Depends(get_db),
 ) -> list[SyncHistoryItem]:
     """
-    获取最近的 AnythingLLM 文档同步任务历史记录。
+    获取最近的知识库文档同步任务历史记录。
     """
     result = await db.execute(
-        select(AnythingLLMDocumentSync)
-        .order_by(AnythingLLMDocumentSync.updated_at.desc())
+        select(RagDocument)
+        .order_by(RagDocument.updated_at.desc())
         .limit(limit)
     )
     records = result.scalars().all()

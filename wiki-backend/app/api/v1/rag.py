@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.security import get_current_user, verify_admin_token
 from rag.chat_service import ChatService
 from rag.ingest_service import IngestService
 
@@ -40,6 +41,7 @@ class RagChatRequest(BaseModel):
 async def rag_ingest(
     body: IngestRequest,
     db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_admin_token),
 ):
     """提交 Wiki 文件到 RAG 异步入库队列。
 
@@ -66,6 +68,7 @@ async def rag_ingest(
 async def rag_chat_stream(
     body: RagChatRequest,
     db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
     """RAG 流式聊天 —— 检索知识库并用 LLM 生成回答。
 

@@ -1,5 +1,5 @@
 """
-文档加载模块 —— 替代 AnythingLLM 的 collector/utils/files。
+文档加载模块 —— 基于 Microsoft MarkItDown 解析多格式文件。
 
 索引链路唯一的文档解析入口。基于 Microsoft MarkItDown，
 支持 PDF、DOCX、PPTX、XLSX、HTML、图片、音频、EPUB、CSV 等格式，

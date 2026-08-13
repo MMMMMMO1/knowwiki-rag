@@ -36,17 +36,6 @@ interface UploadProxyResponse extends Record<string, unknown> {
     message?: string;
 }
 
-interface AnythingLLMSyncStatus {
-    success: boolean;
-    pending_upload: number;
-    pending_delete: number;
-    processing: number;
-    failed: number;
-    synced: number;
-    deleted: number;
-    latest_error?: string | null;
-}
-
 /* ─── Build Ant Design TreeDataNode from backend's folder/file structure ─── */
 
 interface ExtendedTreeDataNode extends TreeDataNode {
@@ -112,7 +101,16 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
     const [selectedFolderTitle, setSelectedFolderTitle] = useState<string>('根目录');
     const [deletingKey, setDeletingKey] = useState<string | null>(null);
     const [result, setResult] = useState<OperationResult | null>(null);
-    const [syncStatus, setSyncStatus] = useState<AnythingLLMSyncStatus | null>(null);
+    const [syncStatus, setSyncStatus] = useState<{
+        success: boolean;
+        pending_upload: number;
+        pending_delete: number;
+        processing: number;
+        failed: number;
+        synced: number;
+        deleted: number;
+        latest_error?: string | null;
+    } | null>(null);
     const [syncStatusLoading, setSyncStatusLoading] = useState(false);
     const [syncRetrying, setSyncRetrying] = useState(false);
 
@@ -154,7 +152,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
     }, [uppy, token]);
 
     useEffect(() => {
-        // Uppy 只提交 Wiki 目录 ID；AnythingLLM 同步参数由后端环境变量统一控制。
+        // Uppy 只提交 Wiki 目录 ID；知识库同步由后端统一处理。
         uppy.setMeta({
             folder_id: selectedFolderId !== null ? String(selectedFolderId) : '',
         });
@@ -168,37 +166,37 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
     const fetchSyncStatus = useCallback(async () => {
         try {
             setSyncStatusLoading(true);
-            const res = await fetch('/api/admin/anythingllm/status', {
+            const res = await fetch('/api/admin/knowledge/status', {
                 headers: { 'Authorization': `Bearer ${token}` },
             });
             const data = await res.json();
             if (!res.ok || !data.success) {
-                throw new Error(data.message || '获取 AnythingLLM 同步状态失败');
+                throw new Error(data.message || '获取知识库状态失败');
             }
-            setSyncStatus(data as AnythingLLMSyncStatus);
+            setSyncStatus(data);
         } catch (error) {
-            console.error('Fetch AnythingLLM sync status error:', error);
+            console.error('Fetch knowledge sync status error:', error);
             setSyncStatus(null);
         } finally {
             setSyncStatusLoading(false);
         }
     }, [token]);
 
-    const triggerAnythingLLMSync = async () => {
+    const triggerSync = async () => {
         try {
             setSyncRetrying(true);
-            const res = await fetch('/api/admin/anythingllm/sync', {
+            const res = await fetch('/api/admin/knowledge/sync', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` },
             });
             const data = await res.json();
             if (!res.ok || !data.success) {
-                throw new Error(data.message || '触发 AnythingLLM 同步失败');
+                throw new Error(data.message || '触发知识库同步失败');
             }
-            message.success('已触发 AnythingLLM 同步');
+            message.success('已触发知识库同步');
             await fetchSyncStatus();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : '触发 AnythingLLM 同步失败');
+            message.error(error instanceof Error ? error.message : '触发知识库同步失败');
         } finally {
             setSyncRetrying(false);
         }
@@ -216,7 +214,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
         ));
         if (!hasPendingSync) return;
 
-        // AnythingLLM 上传后需要缓存和嵌入处理；存在待处理任务时自动轮询状态。
+        // 知识库同步在上传后需要索引和嵌入处理；存在待处理任务时自动轮询状态。
         const timer = window.setInterval(fetchSyncStatus, 5000);
         return () => window.clearInterval(timer);
     }, [fetchSyncStatus, syncStatus]);
@@ -412,7 +410,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <SyncOutlined spin={Boolean(syncStatusLoading || pendingCount > 0 || processingCount > 0)} style={{ color: '#cc785c' }} />
                     <Text strong style={{ fontSize: 13, color: '#444656', fontFamily: 'Inter, sans-serif' }}>
-                        AnythingLLM 同步
+                        知识库同步
                     </Text>
                     <Tag color={syncHealthColor}>{syncHealthText}</Tag>
                     <Tag color="blue">待上传 {syncStatus?.pending_upload ?? 0}</Tag>
@@ -434,8 +432,8 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
                         <Button
                             type="text"
                             size="small"
-                            icon={<SyncOutlined spin={syncRetrying} />}
-                            onClick={triggerAnythingLLMSync}
+                            icon={<ReloadOutlined spin={syncRetrying} />}
+                            onClick={triggerSync}
                         />
                     </Tooltip>
                 </div>

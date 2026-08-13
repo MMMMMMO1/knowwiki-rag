@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains a Wiki application split into two main modules. `wiki-web/` is the Next.js frontend, with route handlers in `app/api/`, pages in `app/`, shared UI in `components/`, helpers in `lib/`, types in `types/`, and static assets in `public/`. `wiki-backend/` is the FastAPI backend, with application code in `app/`, API routers in `app/api/v1/`, core configuration in `app/core/`, and AnythingLLM/Postgres/RustFS services under `anythingllm/`. Use `start_wiki.sh` from the repository root to manage the full local stack.
+This repository contains a Wiki application split into two main modules. `wiki-web/` is the Next.js frontend, with route handlers in `app/api/`, pages in `app/`, shared UI in `components/`, helpers in `lib/`, types in `types/`, and static assets in `public/`. `wiki-backend/` is the FastAPI backend, with application code in `app/`, API routers in `app/api/v1/`, core configuration in `app/core/`, RAG modules in `rag/`, and Postgres/RustFS docker-compose under `anythingllm/`. Use `start_wiki.sh` from the repository root to manage the full local stack.
 
 ## Build, Test, and Development Commands
 
@@ -30,4 +30,4 @@ Recent commits use short messages such as `bugfix`, `fix name issue`, and `feat:
 
 ## Security & Configuration Tips
 
-Keep secrets in ignored `.env` files. Do not expose `ADMIN_TOKEN`, `ANYTHINGLLM_API_KEY`, database credentials, or S3 credentials in committed files. AnythingLLM and storage services are intended to bind to `127.0.0.1` for local development.
+Keep secrets in ignored `.env` files. Do not expose `ADMIN_TOKEN`, database credentials, LLM/Embedding API keys, or S3 credentials in committed files. All services are intended to bind to `127.0.0.1` for local development.

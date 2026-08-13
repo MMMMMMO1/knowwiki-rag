@@ -1,7 +1,6 @@
-services:
-  anythingllm:
-    ports:
-      # 说明：
-      # 这个端口映射只在 `./start_wiki.sh dev` 或 `./start.sh dev` 时生效，
-      # 用于直接调试 AnythingLLM 管理界面和 API；普通 start 仍保持内部访问。
-      - "${ANYTHINGLLM_BIND_HOST:-127.0.0.1}:${ANYTHINGLLM_PORT:-3001}:3001"
+# Dev 模式覆盖文件（历史兼容保留）
+#
+# 原来此文件用于额外开放 AnythingLLM 调试端口（3001→anythingllm:3001）。
+# 自 AnythingLLM 被自研 RAG 替代后，dev 模式与默认模式行为一致。
+# 保留此文件避免破坏 start_wiki.sh dev 命令的兼容性。
+services: {}

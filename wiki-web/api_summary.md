@@ -29,13 +29,13 @@
 | **GET** | `/api/nodes/resolve/{path}` | 根据节点路径解析并获取文件详情内容（含 markdown, PDF 链接等 `ResolvedNode`）。不使用缓存。 |
 
 ### 2. 聊天接口（需登录）
-聊天面板只调用 Next.js 本地 API。后端会在 Docker 内部网络中访问 AnythingLLM，不需要开放 `/anythingllm-api` 给浏览器。
+聊天面板调用 Next.js 本地 API，后端通过自研 RAG 模块完成文档检索与 LLM 流式回答。
 
 | HTTP 方法 | 接口路径 | 描述 |
 | --- | --- | --- |
-| **GET** | `/api/chat/history?session_id={sessionId}` | 获取当前 AnythingLLM embed 会话历史。 |
-| **DELETE** | `/api/chat/history?session_id={sessionId}` | 清空当前 AnythingLLM embed 会话历史。 |
-| **POST** | `/api/chat/stream` | 发送问题并返回 SSE 流式回答。 |
+| **GET** | `/api/chat/history?session_id={sessionId}` | 获取当前会话历史。 |
+| **DELETE** | `/api/chat/history?session_id={sessionId}` | 清空当前会话历史。 |
+| **POST** | `/api/chat/stream` | 发送问题并返回 SSE 流式回答（RAG 检索 + LLM 生成）。 |
 
 ### 3. 管理页面接口 (Next.js 内部路由代理)
 管理端所有修改操作通过 `app/api/admin` 中的 Next.js API 路由转发，后端统一校验数据库用户登录后签发的 JWT。

@@ -1,5 +1,5 @@
 """
-Prompt 组装模块 —— 替代 AnythingLLM 的 constructPrompt + chatPrompt。
+Prompt 组装模块 —— 将检索结果和用户问题组装为 LLM 对话格式。
 
 将 system prompt、检索上下文、用户问题、对话历史组装为
 LLM 可直接消费的 OpenAI 兼容 messages 列表。

@@ -1,5 +1,5 @@
 """
-向量存储模块 —— 替代 AnythingLLM 的 VectorDbProviders。
+向量存储模块 —— 基于 PostgreSQL pgvector 的向量索引与检索。
 
 基于 PostgreSQL + pgvector，提供 Chunk + 向量的增删查。
 """
@@ -117,6 +117,33 @@ class VectorStore:
         )
         document.chunk_count = 0
         document.status = "pending"
+        await self.db.flush()
+
+    async def delete_by_file_id(self, file_id: int) -> None:
+        """按 Wiki 文件 ID 删除对应 RAG 索引。"""
+        doc = await self.get_document_by_file_id(file_id)
+        if doc:
+            await self.db.execute(
+                text("DELETE FROM rag_chunks WHERE document_id = :doc_id"),
+                {"doc_id": doc.id},
+            )
+            await self.db.delete(doc)
+            await self.db.flush()
+
+    async def delete_by_file_ids(self, file_ids: list[int]) -> None:
+        """批量按 file_id 删除 RAG 索引。"""
+        if not file_ids:
+            return
+        docs_result = await self.db.execute(
+            select(RagDocument).where(RagDocument.file_id.in_(file_ids))
+        )
+        docs = docs_result.scalars().all()
+        for doc in docs:
+            await self.db.execute(
+                text("DELETE FROM rag_chunks WHERE document_id = :doc_id"),
+                {"doc_id": doc.id},
+            )
+            await self.db.delete(doc)
         await self.db.flush()
 
     # ── 工具 ──────────────────────────────────────────────

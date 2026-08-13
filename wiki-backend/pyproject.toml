@@ -21,3 +21,6 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "websockets<14.0",
 ]
+
+[tool.pytest.ini_options]
+norecursedirs = ["anythingllm", ".venv", "__pycache__", ".git"]

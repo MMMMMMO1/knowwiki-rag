@@ -18,11 +18,7 @@ CONFIG_ENV_KEYS=(
   WEB_BIND_HOST
   WEB_PUBLIC_HOST
   WEB_PUBLIC_ORIGIN
-  ANYTHINGLLM_PORT
-  ANYTHINGLLM_BIND_HOST
   NEXT_PUBLIC_API_URL
-  NEXT_PUBLIC_CHATBOT_EMBED_ID
-  NEXT_PUBLIC_CHATBOT_USERNAME
   NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME
   NEXT_PUBLIC_CHATBOT_GREETING
   NEXT_PUBLIC_CHATBOT_PLACEHOLDER
@@ -75,8 +71,6 @@ WEB_PORT="${WEB_PORT:-3000}"
 WEB_BIND_HOST="${WEB_BIND_HOST:-127.0.0.1}"
 WEB_PUBLIC_HOST="${WEB_PUBLIC_HOST:-127.0.0.1}"
 WEB_PUBLIC_ORIGIN="${WEB_PUBLIC_ORIGIN:-http://${WEB_PUBLIC_HOST}:${WEB_PORT}}"
-ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-3001}"
-ANYTHINGLLM_BIND_HOST="${ANYTHINGLLM_BIND_HOST:-127.0.0.1}"
 
 info() {
   printf '[INFO] %s\n' "$1"
@@ -94,7 +88,7 @@ usage() {
   cat <<'EOF'
 用法：
   ./start_wiki.sh start      构建镜像并启动 Wiki Web、Wiki Backend 与依赖服务
-  ./start_wiki.sh dev        以调试模式启动，并额外开放 AnythingLLM 端口
+  ./start_wiki.sh dev        以调试模式启动（当前与 start 行为一致，历史兼容）
   ./start_wiki.sh stop       停止并移除整套 compose 服务
   ./start_wiki.sh restart    重启整套容器环境
   ./start_wiki.sh restart-dev 重启调试模式环境
@@ -107,8 +101,6 @@ usage() {
   WEB_PORT=3000              宿主机开放的 Wiki Web 端口
   WEB_BIND_HOST=127.0.0.1    宿主机监听地址
   WEB_PUBLIC_HOST=127.0.0.1  写入前端构建产物的浏览器访问主机
-  ANYTHINGLLM_PORT=3001      dev 模式下宿主机开放的 AnythingLLM 端口
-  ANYTHINGLLM_BIND_HOST=127.0.0.1 dev 模式下 AnythingLLM 的宿主机监听地址
 EOF
 }
 
@@ -181,13 +173,9 @@ prepare_compose_env() {
   export WEB_BIND_HOST
   export WEB_PUBLIC_HOST
   export WEB_PUBLIC_ORIGIN
-  export ANYTHINGLLM_PORT
-  export ANYTHINGLLM_BIND_HOST
   export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-${WEB_PUBLIC_ORIGIN}/wiki-api}"
 
   # 说明：这些变量会在前端构建阶段写入客户端产物，因此需要显式导出给 compose build args。
-  export NEXT_PUBLIC_CHATBOT_EMBED_ID="${NEXT_PUBLIC_CHATBOT_EMBED_ID:-}"
-  export NEXT_PUBLIC_CHATBOT_USERNAME="${NEXT_PUBLIC_CHATBOT_USERNAME:-}"
   export NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME="${NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME:-}"
   export NEXT_PUBLIC_CHATBOT_GREETING="${NEXT_PUBLIC_CHATBOT_GREETING:-}"
   export NEXT_PUBLIC_CHATBOT_PLACEHOLDER="${NEXT_PUBLIC_CHATBOT_PLACEHOLDER:-}"
@@ -251,29 +239,18 @@ start_all() {
 
 start_dev() {
   local compose_options=(-f "${COMPOSE_FILE}" -f "${DEV_COMPOSE_FILE}")
-  local anythingllm_health_host="${ANYTHINGLLM_BIND_HOST}"
   require_commands
   ensure_project_files true
   prepare_compose_env
-
-  # 说明：
-  # 如果监听地址设置为 0.0.0.0，健康检查仍使用 127.0.0.1 访问宿主机端口，
-  # 因为 0.0.0.0 是绑定地址，不是稳定的客户端访问地址。
-  if [[ "${anythingllm_health_host}" == "0.0.0.0" ]]; then
-    anythingllm_health_host="127.0.0.1"
-  fi
 
   info "以 dev 模式构建并启动 Wiki 容器服务 ..."
   "${COMPOSE_CMD[@]}" "${compose_options[@]}" up -d --build
 
   wait_for_http "${WEB_PUBLIC_ORIGIN}" "Wiki Web" 180
-  wait_for_http "http://${anythingllm_health_host}:${ANYTHINGLLM_PORT}" "AnythingLLM" 180
 
   printf '\nDev 模式启动完成：\n'
   printf '  前端地址: %s\n' "${WEB_PUBLIC_ORIGIN}"
-  printf '  AnythingLLM 调试地址: http://%s:%s\n' "${ANYTHINGLLM_BIND_HOST}" "${ANYTHINGLLM_PORT}"
   printf '  对外开放端口: %s:%s -> wiki-web:3000\n' "${WEB_BIND_HOST}" "${WEB_PORT}"
-  printf '  Dev 额外开放: %s:%s -> anythingllm:3001\n' "${ANYTHINGLLM_BIND_HOST}" "${ANYTHINGLLM_PORT}"
 }
 
 stop_all() {

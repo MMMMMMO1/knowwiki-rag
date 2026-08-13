@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
         }
 
         const wikiFormData = new FormData();
-        // Next.js 代理只把文件和 Wiki 目录信息传给后端；AnythingLLM 同步由后端异步处理。
+        // Next.js 代理只把文件和 Wiki 目录信息传给后端；知识库同步由后端异步处理。
         wikiFormData.append('file', uploadFile, uploadFile.name);
 
         const folderId = getTextField(formData, 'folder_id');

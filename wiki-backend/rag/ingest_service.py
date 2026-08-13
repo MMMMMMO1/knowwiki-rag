@@ -5,6 +5,8 @@
 实际处理由 task_worker 在后台完成。
 """
 
+from uuid import uuid4
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RagDocument
@@ -37,12 +39,11 @@ class IngestService:
         if not file:
             raise ValueError(f"文件不存在: file_id={file_id}")
 
-        # 创建 RAG 文档记录
+        # 创建 RAG 文档记录，doc_id 在 pending 阶段就生成 UUID
         doc = RagDocument(
             file_id=file.id,
-            doc_id="",  # TaskWorker 会填充
+            doc_id=str(uuid4()),
             title=file.title,
-            content_hash="",  # TaskWorker 会填充
             status="pending",
         )
         self.db.add(doc)

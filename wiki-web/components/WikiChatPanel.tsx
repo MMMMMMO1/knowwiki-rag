@@ -5,15 +5,14 @@ import { Alert, Button, Empty, Input, Spin, Tooltip } from 'antd';
 import { BulbOutlined, DeleteOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
-    AnythingLLMChatMessage,
-    AnythingLLMStreamEvent,
-    createAnythingLLMChatConfig,
-    fetchAnythingLLMHistory,
-    getOrCreateAnythingLLMSessionId,
-    resetAnythingLLMSession,
-    streamAnythingLLMChat,
+    ChatMessage,
+    StreamEvent,
+    createChatConfig,
+    fetchChatHistory,
+    getOrCreateSessionId,
+    resetChatSession,
     streamRagChat,
-} from '@/lib/anythingllm-chat';
+} from '@/lib/rag-chat';
 
 const { TextArea } = Input;
 
@@ -25,9 +24,9 @@ type LearningRecommendation = {
 };
 
 export default function WikiChatPanel() {
-    const config = useMemo(() => createAnythingLLMChatConfig(), []);
+    const config = useMemo(() => createChatConfig(), []);
     const [sessionId, setSessionId] = useState('');
-    const [messages, setMessages] = useState<AnythingLLMChatMessage[]>([]);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [inputValue, setInputValue] = useState('');
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [sending, setSending] = useState(false);
@@ -35,15 +34,11 @@ export default function WikiChatPanel() {
     const scrollRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
-        if (!config) {
-            return;
-        }
-
-        setSessionId(getOrCreateAnythingLLMSessionId(config.embedId));
+        setSessionId(getOrCreateSessionId());
     }, [config]);
 
     useEffect(() => {
-        if (!config || !sessionId) {
+        if (!sessionId) {
             return;
         }
 
@@ -54,7 +49,7 @@ export default function WikiChatPanel() {
             setError('');
 
             try {
-                const history = await fetchAnythingLLMHistory(sessionId);
+                const history = await fetchChatHistory(sessionId);
                 if (!ignore) {
                     setMessages(history);
                 }
@@ -87,7 +82,7 @@ export default function WikiChatPanel() {
     const handleSubmit = async (event?: FormEvent, suggestedMessage?: string) => {
         event?.preventDefault();
 
-        if (!config || !sessionId || sending) {
+        if (!sessionId || sending) {
             return;
         }
 
@@ -96,13 +91,13 @@ export default function WikiChatPanel() {
             return;
         }
 
-        const userMessage: AnythingLLMChatMessage = {
+        const userMessage: ChatMessage = {
             id: createLocalId(),
             role: 'user',
             content: message,
             sentAt: Math.floor(Date.now() / 1000),
         };
-        const assistantMessage: AnythingLLMChatMessage = {
+        const assistantMessage: ChatMessage = {
             id: createLocalId(),
             role: 'assistant',
             content: '',
@@ -140,12 +135,12 @@ export default function WikiChatPanel() {
     };
 
     const handleReset = async () => {
-        if (!config || !sessionId || sending) {
+        if (!sessionId || sending) {
             return;
         }
 
         setError('');
-        const ok = await resetAnythingLLMSession(sessionId);
+        const ok = await resetChatSession(sessionId);
 
         if (ok) {
             setMessages([]);
@@ -155,7 +150,7 @@ export default function WikiChatPanel() {
         setError('会话重置失败，请稍后重试');
     };
 
-    const applyStreamEvent = (streamEvent: AnythingLLMStreamEvent, assistantId: string) => {
+    const applyStreamEvent = (streamEvent: StreamEvent, assistantId: string) => {
         setMessages((current) => current.map((item) => {
             if (item.id !== assistantId) {
                 return item;
@@ -197,7 +192,7 @@ export default function WikiChatPanel() {
         }));
     };
 
-    if (!config) {
+    if (!sessionId) {
         return (
             <aside className="wiki-chat-panel">
                 <div className="wiki-chat-panel__header">
@@ -206,7 +201,7 @@ export default function WikiChatPanel() {
                         <h2>智能问答</h2>
                     </div>
                 </div>
-                <Empty description="AI 助手未配置" />
+                <Empty description="正在初始化..." />
             </aside>
         );
     }
@@ -229,7 +224,7 @@ export default function WikiChatPanel() {
                                     return;
                                 }
                                 setLoadingHistory(true);
-                                fetchAnythingLLMHistory(sessionId)
+                                fetchChatHistory(sessionId)
                                     .then(setMessages)
                                     .catch(() => setError('历史消息加载失败'))
                                     .finally(() => setLoadingHistory(false));
@@ -315,7 +310,7 @@ export default function WikiChatPanel() {
     );
 }
 
-function ChatMessageBubble({ message }: { message: AnythingLLMChatMessage }) {
+function ChatMessageBubble({ message }: { message: ChatMessage }) {
     const isUser = message.role === 'user';
     const parsedContent = parseThinkContent(message.content);
     const recommendationContent = isUser

@@ -1,8 +1,6 @@
 import { buildAuthHeaders } from '@/lib/auth-token';
 
-export type AnythingLLMChatConfig = {
-    embedId: string;
-    username?: string;
+export type ChatConfig = {
     assistantName: string;
     greeting: string;
     placeholder: string;
@@ -27,7 +25,7 @@ const LEARNING_RECOMMENDATION_PROMPT = `
 4. 如果用户问题不适合推荐学习内容，返回 {"learningRecommendations":[]}。
 `.trim();
 
-export type AnythingLLMChatMessage = {
+export type ChatMessage = {
     id: string;
     role: 'user' | 'assistant';
     content: string;
@@ -38,7 +36,7 @@ export type AnythingLLMChatMessage = {
     pending?: boolean;
 };
 
-type AnythingLLMHistoryItem = {
+type ChatHistoryItem = {
     role: 'user' | 'assistant' | string;
     content: string;
     sentAt?: number;
@@ -47,7 +45,7 @@ type AnythingLLMHistoryItem = {
     errorMsg?: string | null;
 };
 
-export type AnythingLLMStreamEvent = {
+export type StreamEvent = {
     uuid?: string;
     id?: string;
     type?: 'textResponseChunk' | 'textResponse' | 'abort' | string;
@@ -58,16 +56,8 @@ export type AnythingLLMStreamEvent = {
     errorMsg?: string | null;
 };
 
-export function createAnythingLLMChatConfig(): AnythingLLMChatConfig | null {
-    const embedId = process.env.NEXT_PUBLIC_CHATBOT_EMBED_ID?.trim();
-
-    if (!embedId) {
-        return null;
-    }
-
+export function createChatConfig(): ChatConfig {
     return {
-        embedId,
-        username: process.env.NEXT_PUBLIC_CHATBOT_USERNAME?.trim(),
         assistantName: process.env.NEXT_PUBLIC_CHATBOT_ASSISTANT_NAME?.trim() || '智能学习助手',
         greeting: process.env.NEXT_PUBLIC_CHATBOT_GREETING?.trim() || '你好，我可以帮你查询当前知识库内容。',
         placeholder: process.env.NEXT_PUBLIC_CHATBOT_PLACEHOLDER?.trim() || '输入你的问题...',
@@ -75,14 +65,14 @@ export function createAnythingLLMChatConfig(): AnythingLLMChatConfig | null {
             process.env.NEXT_PUBLIC_CHATBOT_DEFAULT_MESSAGES?.trim()
             || '介绍一下这个知识库,我可以如何使用这个 Wiki'
         ),
-        prompt: buildChatPrompt(process.env.NEXT_PUBLIC_CHATBOT_PROMPT?.trim()),
+        prompt: process.env.NEXT_PUBLIC_CHATBOT_PROMPT?.trim(),
         model: process.env.NEXT_PUBLIC_CHATBOT_MODEL?.trim(),
         temperature: process.env.NEXT_PUBLIC_CHATBOT_TEMPERATURE?.trim(),
     };
 }
 
-export function getOrCreateAnythingLLMSessionId(embedId: string) {
-    const storageKey = `allm_${embedId}_session_id`;
+export function getOrCreateSessionId() {
+    const storageKey = 'wiki_chat_session_id';
     const fallbackId = createId();
 
     try {
@@ -94,14 +84,13 @@ export function getOrCreateAnythingLLMSessionId(embedId: string) {
         window.localStorage.setItem(storageKey, fallbackId);
         return fallbackId;
     } catch {
-        // 说明：隐私模式或禁用 localStorage 时仍允许当前页面完成一次会话。
         return fallbackId;
     }
 }
 
-export async function fetchAnythingLLMHistory(
+export async function fetchChatHistory(
     sessionId: string
-): Promise<AnythingLLMChatMessage[]> {
+): Promise<ChatMessage[]> {
     const response = await fetch(`/api/chat/history?session_id=${sessionId}`, {
         headers: buildAuthHeaders(),
     });
@@ -110,7 +99,7 @@ export async function fetchAnythingLLMHistory(
         throw new Error('历史消息加载失败');
     }
 
-    const data = await response.json() as { history?: AnythingLLMHistoryItem[] };
+    const data = await response.json() as { history?: ChatHistoryItem[] };
     const history = Array.isArray(data.history) ? data.history : [];
 
     return history.map((message) => ({
@@ -124,7 +113,7 @@ export async function fetchAnythingLLMHistory(
     }));
 }
 
-export async function resetAnythingLLMSession(
+export async function resetChatSession(
     sessionId: string
 ) {
     const response = await fetch(`/api/chat/history?session_id=${sessionId}`, {
@@ -135,70 +124,6 @@ export async function resetAnythingLLMSession(
     return response.ok;
 }
 
-export async function streamAnythingLLMChat(
-    config: AnythingLLMChatConfig,
-    sessionId: string,
-    message: string,
-    onEvent: (event: AnythingLLMStreamEvent) => void,
-    signal?: AbortSignal
-) {
-    const response = await fetch(`/api/chat/stream`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            ...buildAuthHeaders(),
-        },
-        body: JSON.stringify({
-            message,
-            session_id: sessionId,
-            prompt: config.prompt || null,
-            model: config.model || null,
-            temperature: config.temperature ? parseFloat(config.temperature) : null,
-        }),
-        signal,
-    });
-
-    if (!response.ok) {
-        await emitServerError(response, onEvent);
-        return;
-    }
-
-    if (!response.body) {
-        onEvent({
-            type: 'abort',
-            textResponse: null,
-            sources: [],
-            close: true,
-            error: '服务端没有返回可读取的流式响应',
-        });
-        return;
-    }
-
-    // 说明：AnythingLLM 使用标准 SSE 文本流，这里只解析 data 行并保持事件顺序。
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-            break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split(/\n\n|\r\n\r\n/);
-        buffer = events.pop() || '';
-
-        for (const eventText of events) {
-            parseServerSentEvent(eventText, onEvent);
-        }
-    }
-
-    if (buffer.trim()) {
-        parseServerSentEvent(buffer, onEvent);
-    }
-}
-
 function parseDefaultMessages(value: string) {
     return value
         .split(',')
@@ -206,18 +131,9 @@ function parseDefaultMessages(value: string) {
         .filter(Boolean);
 }
 
-function buildChatPrompt(prompt?: string) {
-    if (!prompt) {
-        return LEARNING_RECOMMENDATION_PROMPT;
-    }
-
-    // 说明：保留用户已有的 AnythingLLM prompt，只在末尾追加学习推荐输出协议。
-    return `${prompt}\n\n${LEARNING_RECOMMENDATION_PROMPT}`;
-}
-
 function parseServerSentEvent(
     eventText: string,
-    onEvent: (event: AnythingLLMStreamEvent) => void
+    onEvent: (event: StreamEvent) => void
 ) {
     const data = eventText
         .split(/\r?\n/)
@@ -231,7 +147,7 @@ function parseServerSentEvent(
     }
 
     try {
-        onEvent(JSON.parse(data) as AnythingLLMStreamEvent);
+        onEvent(JSON.parse(data) as StreamEvent);
     } catch {
         // 说明：忽略无法解析的 SSE 片段，避免单个坏包中断已经收到的回复。
     }
@@ -239,10 +155,10 @@ function parseServerSentEvent(
 
 async function emitServerError(
     response: Response,
-    onEvent: (event: AnythingLLMStreamEvent) => void
+    onEvent: (event: StreamEvent) => void
 ) {
     try {
-        const serverResponse = await response.json() as AnythingLLMStreamEvent;
+        const serverResponse = await response.json() as StreamEvent;
         onEvent(serverResponse);
     } catch {
         onEvent({
@@ -261,7 +177,7 @@ function createId() {
     }
 
     // 说明：在非 HTTPS 的非安全上下文中，crypto.randomUUID 可能不可用。
-    // 这里使用标准的 UUID v4 算法以保证 AnythingLLM 会话校验能通过（它要求必须是合法的 UUID）。
+    // 这里使用标准的 UUID v4 算法以兼容各种浏览器环境。
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
         const r = (Math.random() * 16) | 0;
         const v = c === 'x' ? r : (r & 0x3) | 0x8;
@@ -273,15 +189,11 @@ function createId() {
 
 /**
  * 调用自研 RAG 后端的流式聊天接口。
- *
- * 与 streamAnythingLLMChat 的差异：
- * 1. 请求体只需要 {message}，不需要 session_id / prompt / model / temperature
- * 2. SSE 格式为纯文本 token（data: 你好\n\n），而非 JSON 事件
- * 3. 通过包装 token 为 textResponseChunk 事件，保持 WikiChatPanel 兼容
+ * SSE 格式为纯文本 token（data: 你好\n\n），通过包装 token 为 textResponseChunk 事件保持兼容。
  */
 export async function streamRagChat(
     message: string,
-    onEvent: (event: AnythingLLMStreamEvent) => void,
+    onEvent: (event: StreamEvent) => void,
     signal?: AbortSignal
 ) {
     const response = await fetch('/api/chat/rag/stream', {
@@ -332,7 +244,8 @@ export async function streamRagChat(
 
             if (!data) continue;
             if (data === '[DONE]') {
-                onEvent({ type: 'textResponse', textResponse: '', sources: [], close: true, error: null });
+                // 结束事件：只标记完成，不覆盖已累积的答案（textResponse 必须为 null）
+                onEvent({ type: 'textResponse', textResponse: null, sources: [], close: true, error: null });
                 return;
             }
             if (data.startsWith('[ERROR]')) {

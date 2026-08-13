@@ -43,14 +43,11 @@ interface ChatMessage {
 
 interface SyncRecord {
     id: number;
-    full_path: string;
-    storage_key: string;
-    title: string;
-    operation: string;
+    doc_id: string;
+    file_id: number | null;
     status: string;
-    retry_count: number;
-    last_error: string | null;
-    synced_at: string | null;
+    error_message: string | null;
+    content_hash: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -336,13 +333,13 @@ export default function AdminDashboard() {
         if (!token) return;
         setSyncRetrying(true);
         try {
-            const res = await fetch('/api/admin/anythingllm/sync', {
+            const res = await fetch('/api/admin/knowledge/sync', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
                 const data = await res.json();
-                message.success(data.message || '已触发同步同步中心任务');
+                message.success(data.message || '已触发知识库同步任务');
                 fetchSyncHistory();
                 fetchStats();
             } else {
@@ -409,7 +406,7 @@ export default function AdminDashboard() {
                     <Row gutter={24}>
                         <Col xs={24} md={12}>
                             <div style={{ background: '#faf9f5', padding: 24, borderRadius: 12, height: '100%' }}>
-                                <Title level={5} style={{ fontFamily: 'Manrope', color: '#cc785c' }}>AnythingLLM 同步健康</Title>
+                                <Title level={5} style={{ fontFamily: 'Manrope', color: '#cc785c' }}>知识库同步健康</Title>
                                 <Space direction="vertical" style={{ width: '100%', marginTop: 12 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                         <Text>异常同步失败任务：</Text>
@@ -508,24 +505,18 @@ export default function AdminDashboard() {
     const renderSync = () => {
         const columns = [
             {
-                title: '文件标题',
-                dataIndex: 'title',
-                key: 'title',
-                render: (text: string, r: SyncRecord) => (
-                    <Space direction="vertical" size={2}>
-                        <Text strong style={{ fontSize: 13 }}>{text}</Text>
-                        <Text type="secondary" style={{ fontSize: 11, fontFamily: 'monospace' }}>{r.full_path}</Text>
-                    </Space>
+                title: '文档 ID',
+                dataIndex: 'doc_id',
+                key: 'doc_id',
+                render: (text: string) => (
+                    <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>{text}</Text>
                 )
             },
             {
-                title: '操作类型',
-                dataIndex: 'operation',
-                key: 'operation',
-                render: (op: string) => {
-                    const isUpload = op === 'upload';
-                    return <Tag color={isUpload ? 'cyan' : 'red'}>{isUpload ? '上传/更新' : '删除'}</Tag>;
-                }
+                title: '关联文件',
+                dataIndex: 'file_id',
+                key: 'file_id',
+                render: (fid: number | null) => fid ? <Tag>{fid}</Tag> : <Text type="secondary">—</Text>
             },
             {
                 title: '同步状态',
@@ -534,24 +525,17 @@ export default function AdminDashboard() {
                 render: (status: string) => {
                     let color = 'default';
                     let text = status;
-                    if (status === 'synced') { color = 'green'; text = '已同步'; }
-                    else if (status === 'deleted') { color = 'default'; text = '已清理'; }
+                    if (status === 'completed') { color = 'green'; text = '已完成'; }
                     else if (status === 'failed') { color = 'red'; text = '失败'; }
-                    else if (status === 'pending_upload' || status === 'pending_delete') { color = 'blue'; text = '队列中'; }
-                    else if (status === 'processing') { color = 'orange'; text = '同步中'; }
+                    else if (status === 'pending') { color = 'blue'; text = '队列中'; }
+                    else if (status === 'processing') { color = 'orange'; text = '处理中'; }
                     return <Tag color={color}>{text}</Tag>;
                 }
             },
             {
-                title: '错误重试',
-                dataIndex: 'retry_count',
-                key: 'retry_count',
-                render: (count: number) => `已重试 ${count} 次`
-            },
-            {
                 title: '错误详情',
-                dataIndex: 'last_error',
-                key: 'last_error',
+                dataIndex: 'error_message',
+                key: 'error_message',
                 width: 250,
                 render: (err: string | null) => err ? (
                     <Tooltip title={err}>
@@ -560,7 +544,7 @@ export default function AdminDashboard() {
                 ) : <Text type="secondary">—</Text>
             },
             {
-                title: '同步时间',
+                title: '更新时间',
                 dataIndex: 'updated_at',
                 key: 'updated_at',
                 render: (t: string) => new Date(t).toLocaleString('zh-CN')
@@ -571,7 +555,7 @@ export default function AdminDashboard() {
             <Card variant="borderless" style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.03)', borderRadius: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
                     <Title level={4} style={{ fontFamily: 'Manrope', margin: 0, letterSpacing: '-0.02em' }}>
-                        AnythingLLM 同步任务中心
+                        知识库同步任务中心
                     </Title>
                     <Space>
                         <Button type="primary" onClick={triggerManualSync} loading={syncRetrying} icon={<SyncOutlined spin={syncRetrying} />} style={{ background: '#cc785c', border: 'none', borderRadius: 8 }}>

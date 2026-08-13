@@ -92,17 +92,14 @@ def test_sync_history_item_validation() -> None:
     now = datetime.now(timezone.utc)
     item = SyncHistoryItem(
         id=1,
-        full_path="folder/file.md",
-        storage_key="folder/file.md",
-        title="file.md",
-        operation="upload",
-        status="synced",
-        retry_count=0,
-        last_error=None,
-        synced_at=now,
+        doc_id="550e8400-e29b-41d4-a716-446655440000",
+        file_id=10,
+        status="completed",
+        error_message=None,
+        content_hash=None,
         created_at=now,
         updated_at=now,
     )
     assert item.id == 1
-    assert item.status == "synced"
-    assert item.synced_at == now
+    assert item.status == "completed"
+    assert item.doc_id == "550e8400-e29b-41d4-a716-446655440000"

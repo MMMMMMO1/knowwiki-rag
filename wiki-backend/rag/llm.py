@@ -1,5 +1,5 @@
 """
-LLM 调用模块 —— 替代 AnythingLLM 的 AiProviders。
+LLM 调用模块 —— 通过 OpenAI 兼容 API 调用大语言模型（DeepSeek 等）。
 
 调用 OpenAI 兼容的 /chat/completions API，支持流式和非流式。
 """

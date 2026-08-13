@@ -83,25 +83,6 @@ class SyncResponse(BaseModel):
     skipped: int = 0
 
 
-class AnythingLLMSyncStatusResponse(BaseModel):
-    """AnythingLLM sync status response."""
-    success: bool
-    pending_upload: int = 0
-    pending_delete: int = 0
-    processing: int = 0
-    failed: int = 0
-    synced: int = 0
-    deleted: int = 0
-    latest_error: Optional[str] = None
-
-
-class AnythingLLMSyncTriggerResponse(BaseModel):
-    """AnythingLLM sync trigger response."""
-    success: bool
-    message: str
-    scheduled: int = 0
-
-
 # ============== Upload Schemas ==============
 
 class UploadResponse(BaseModel):
@@ -177,14 +158,11 @@ class ChatMessageAudit(BaseModel):
 
 class SyncHistoryItem(BaseModel):
     id: int
-    full_path: str
-    storage_key: str
-    title: str
-    operation: str
+    doc_id: str
+    file_id: Optional[int] = None
     status: str
-    retry_count: int
-    last_error: Optional[str] = None
-    synced_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    content_hash: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
