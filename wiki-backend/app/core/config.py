@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     TOP_K: int = 5
     RAG_SYNC_MAX_RETRIES: int = 3
     SYSTEM_PROMPT: str = ""
+
+    # Redis / Celery 消息队列设置（RAG 入库任务调度）
+    REDIS_URL: str = "redis://redis:6379/0"
+    CELERY_BROKER_URL: str = "redis://redis:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://redis:6379/1"
+    RAG_TASK_MAX_RETRIES: int = 3
+    RAG_TASK_RETRY_DELAY_SECONDS: int = 30
+
     class Config:
         env_file = ROOT_ENV_FILE
         env_file_encoding = "utf-8"

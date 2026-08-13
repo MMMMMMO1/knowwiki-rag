@@ -39,20 +39,28 @@ async def rag_ingest(
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_admin_token),
 ):
-    """提交 Wiki 文件到 RAG 异步入库队列。
+    """提交 Wiki 文件到 RAG 入库队列。
 
-    立即返回入库记录，实际处理由 TaskWorker 在后台完成。
+    创建或重置 RagDocument 记录，然后投递 Celery 任务，立即返回。
+    实际处理由 rag-worker 在后台完成。
     """
     try:
         service = IngestService(db)
         doc = await service.ingest(file_id=body.file_id)
         await db.commit()
-
-        return IngestResponse(
-            id=doc.id,
-            file_id=doc.file_id,
-            title=doc.title,
-            status=doc.status,
-        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+    # 投递 Celery 任务
+    from rag.tasks import enqueue_rag_document_task
+    queued = enqueue_rag_document_task(doc.id)
+    if not queued:
+        from rag.task_worker import mark_rag_document_failed
+        await mark_rag_document_failed(doc.id, "Celery 任务投递失败（Redis 不可用）")
+
+    return IngestResponse(
+        id=doc.id,
+        file_id=doc.file_id,
+        title=doc.title,
+        status=doc.status,
+    )

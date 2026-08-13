@@ -192,16 +192,23 @@ async def upload_file(
         sort_order=extract_sort_order(filename),
     )
 
-    # 创建 RAG 索引任务
+    # 创建或重置 RAG 索引记录（幂等，不执行实际解析/向量化）
     from rag.ingest_service import IngestService
     rag_service = IngestService(db)
-    await rag_service.ingest(file_id=file_node.id)
+    rag_doc = await rag_service.ingest(file_id=file_node.id)
 
     await db.commit()
-    
+
+    # 投递 Celery 入库任务到 Redis，由 rag-worker 异步消费
+    from rag.tasks import enqueue_rag_document_task
+    queued = enqueue_rag_document_task(rag_doc.id)
+    if not queued:
+        from rag.task_worker import mark_rag_document_failed
+        await mark_rag_document_failed(rag_doc.id, "Celery 任务投递失败（Redis 不可用）")
+
     return UploadResponse(
         success=True,
-        message=f"File uploaded successfully: {full_path}. RAG indexing queued.",
+        message=f"File uploaded successfully: {full_path}. RAG indexing task queued.",
         file=FileResponse(
             id=file_node.id,
             folder_id=file_node.folder_id,
@@ -338,7 +345,7 @@ async def rag_knowledge_sync(
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """把 failed 或 pending 的 RAG 文档重置为 pending，交给 TaskWorker 重试。"""
+    """把 failed 或 pending 的 RAG 文档重置为 pending，并批量重新投递 Celery 任务。"""
     from app.models import RagDocument
 
     result = await db.execute(
@@ -348,12 +355,35 @@ async def rag_knowledge_sync(
     )
     docs = result.scalars().all()
 
+    doc_ids: list[int] = []
     for doc in docs:
         doc.status = "pending"
         doc.error_message = None
+        doc_ids.append(doc.id)
 
     await db.commit()
-    return {"success": True, "message": f"Reset {len(docs)} documents to pending."}
+
+    # 批量重新投递 Celery 任务
+    from rag.tasks import enqueue_rag_document_task
+    enqueued = 0
+    failed_ids: list[int] = []
+    for doc_id in doc_ids:
+        if enqueue_rag_document_task(doc_id):
+            enqueued += 1
+        else:
+            failed_ids.append(doc_id)
+
+    if failed_ids:
+        from rag.task_worker import mark_rag_document_failed
+        for doc_id in failed_ids:
+            await mark_rag_document_failed(doc_id, "Celery 任务投递失败（Redis 不可用）")
+
+    return {
+        "success": True,
+        "message": f"Reset {len(docs)} documents to pending.",
+        "enqueued": enqueued,
+        "failed_enqueue": len(failed_ids),
+    }
 
 
 # ============== Dashboard Statistics ==============

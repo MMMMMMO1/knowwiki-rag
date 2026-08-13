@@ -28,7 +28,7 @@ class IngestService:
         """为指定 Wiki 文件创建 RAG 入库记录（对 file_id 幂等）。
 
         只创建记录，不执行 loader/splitter/embedder。
-        实际处理由 TaskWorker 在后台完成。
+        实际处理由 Celery rag-worker 在后台完成。
 
         幂等策略：同一 file_id 已有记录则重置为 pending 并复用，
         顺带清理历史遗留的重复记录，避免 scalar_one_or_none() 报错。

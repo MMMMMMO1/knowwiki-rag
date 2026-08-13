@@ -70,6 +70,8 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - wiki-internal
     restart: unless-stopped
@@ -80,6 +82,52 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  rag-worker:
+    image: wiki-backend:latest
+    container_name: rag-worker
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      # 说明：与 wiki-backend 使用同一份 .env，服务名同样是 postgres/rustfs。
+      DB_HOST: postgres
+      DB_PORT: 5432
+      S3_ENDPOINT_URL: http://rustfs:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      uv run celery -A rag.celery_app:celery_app worker
+      --loglevel=info
+      --concurrency=2
+      --queues=rag-indexing
+    networks:
+      - wiki-internal
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    # 说明：Redis 只暴露在 Docker 内部网络，不映射宿主机端口。
+    expose:
+      - "6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - wiki-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
 
 
@@ -177,3 +225,4 @@ networks:
 volumes:
   rustfs_data:
   rustfs_logs:
+  redis_data:

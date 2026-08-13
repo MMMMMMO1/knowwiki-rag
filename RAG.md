@@ -9,6 +9,52 @@
 
 ---
 
+# RAG 入库架构（消息队列版）
+
+入库从「数据库 pending 轮询」升级为「Redis + Celery 消息队列」。
+
+```
+上传文件
+  -> 保存到 RustFS/S3
+  -> 写 File 记录
+  -> 写 RagDocument(status=pending)   ← 状态表：只记录，不处理
+  -> 投递 Celery 任务到 Redis          ← 调度层：只调度
+  -> rag-worker 消费任务
+  -> loader(MarkItDown) / splitter / embedder / vector_store
+  -> 更新 RagDocument 状态(completed / failed)
+```
+
+## 三层职责划分
+
+| 层 | 组件 | 职责 |
+|----|------|------|
+| 调度层 | Redis + Celery | 任务投递、重试、worker 并发消费、失败记录 |
+| 状态与审计层 | PostgreSQL `rag_documents` | pending / processing / completed / failed、error_message、chunk_count、content_hash |
+| 向量检索层 | PostgreSQL pgvector `rag_chunks` | 1024 维 embedding 向量、cosine_distance 检索 |
+
+## 关键模块
+
+| 文件 | 职责 |
+|------|------|
+| `rag/celery_app.py` | 创建 Celery app，配置 broker / result backend / 路由 |
+| `rag/tasks.py` | 定义 `process_rag_document` 任务 + `enqueue_rag_document_task` 投递辅助 |
+| `rag/task_worker.py` | `RagIndexingProcessor` 单任务处理器（不再轮询） |
+| `rag/ingest_service.py` | 创建或重置 RagDocument 记录（幂等） |
+
+## 为什么用消息队列
+
+1. 上传接口不做 embedding —— 解析、切分、向量化耗时（可能数秒到数十秒），
+   同步做会阻塞 HTTP 请求；投递队列后立即返回。
+2. Redis/Celery 比「pending 轮询」更适合扩展 —— 轮询有固定的空转延迟、
+   单进程吞吐受限；Celery 支持多 worker 并发消费、按队列水平扩展。
+3. `rag_documents` 仍然是状态表 —— 队列只负责调度，业务可观测性
+   （管理后台 /knowledge/status）靠状态表，两者解耦。
+4. 失败任务重试 —— Celery 的 max_retries + countdown 自动延迟重试，
+   可重试错误（网络、embedding 限流）由任务自己声明。
+5. 多 worker 并发消费 —— `--concurrency=N` + Redis 队列天然支持水平扩展。
+
+---
+
 # 第一步：定义 RAG 数据结构（schemas.py）
 
 ## 1. 为什么要先定义统一的数据结构

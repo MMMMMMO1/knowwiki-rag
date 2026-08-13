@@ -1,14 +1,17 @@
 """
-后台工人 —— 轮询 rag_documents 表中 pending 的记录，执行完整 RAG 流水线。
+RAG 入库单任务处理器 —— 由 Celery worker 调用，处理单个 rag_document。
 
-流水线: loader → splitter → embedder → vector_store
-状态机: pending → processing → completed | failed
+流水线: 读取 RagDocument → 状态置 processing → 读 S3 → MarkItDown 解析
+        → splitter 切分 → embedding → VectorStore 写入 → 状态置 completed / failed。
+
+不再包含无限 while 轮询循环；调度由 Celery + Redis 负责，
+本模块只负责"处理一个任务"。
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
+import re
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,101 +24,117 @@ from rag.splitter import TextSplitter
 from rag.vector_store import VectorStore
 
 
-class TaskWorker:
-    """后台 RAG 入库工人。
+class RetryableIndexingError(Exception):
+    """可重试的入库错误（网络抖动、S3 暂不可用、embedding API 限流等）。
 
-    用法:
-        worker = TaskWorker()
-        await worker.run()  # 阻塞，持续轮询
+    抛出此异常的任务会由 Celery 在延迟后自动重试。
     """
 
-    def __init__(self, poll_interval: float = 1.0):
-        self.poll_interval = poll_interval
-        self._running = False
 
-    async def run(self) -> None:
-        """启动轮询循环（阻塞调用）。"""
-        self._running = True
-        print("[TaskWorker] 启动，等待待处理文档...")
+# 匹配常见的密钥形态，用于从错误信息中脱敏（避免 API Key 写入日志 / DB）。
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9._-]+"),
+    re.compile(r"Bearer\s+[A-Za-z0-9._-]+"),
+]
 
-        while self._running:
-            async with AsyncSessionLocal() as db:
-                try:
-                    processed = await self._process_one(db)
-                    if not processed:
-                        await asyncio.sleep(self.poll_interval)
-                except Exception as exc:
-                    print(f"[TaskWorker] 轮询异常: {exc}")
-                    await asyncio.sleep(self.poll_interval)
 
-    async def _process_one(self, db: AsyncSession) -> bool:
-        """取一条 pending 记录并处理。返回 True 表示处理了一条。"""
-        # 1. 取一条 pending 记录并锁定为 processing
+def sanitize_error_message(message: str) -> str:
+    """脱敏错误信息，移除可能包含的 API Key / Bearer token。"""
+    for pattern in _SECRET_PATTERNS:
+        message = pattern.sub("***", message)
+    return message
+
+
+class RagIndexingProcessor:
+    """处理单个 RAG 入库任务。
+
+    用法（由 Celery task 调用）:
+        processor = RagIndexingProcessor()
+        await processor.process(rag_document_id)
+    """
+
+    async def process(self, rag_document_id: int) -> None:
+        """执行完整 RAG 流水线，更新 RagDocument 状态。
+
+        成功: status=completed，chunk_count 已写入。
+        失败: status=failed，error_message 已写入（脱敏），并重新抛出异常
+              （RetryableIndexingError 会触发 Celery 重试）。
+        """
+        async with AsyncSessionLocal() as db:
+            doc = await self._load_document(db, rag_document_id)
+            if doc is None:
+                return
+
+            # 状态置 processing
+            doc.status = "processing"
+            await db.commit()
+
+            try:
+                await self._run_pipeline(db, doc)
+                doc.status = "completed"
+                doc.error_message = None
+                await db.commit()
+            except Exception as exc:
+                # 失败：回滚当前事务，写 failed + 脱敏错误
+                await db.rollback()
+                await self._mark_failed(rag_document_id, sanitize_error_message(str(exc)))
+                # 重新抛出，让上层（Celery task）决定是否重试
+                raise
+
+    async def _load_document(
+        self, db: AsyncSession, rag_document_id: int
+    ) -> RagDocument | None:
+        """读取 RagDocument；不存在则静默返回 None。"""
         result = await db.execute(
-            select(RagDocument)
-            .where(RagDocument.status == "pending")
-            .order_by(RagDocument.created_at.asc())
-            .limit(1)
-            .with_for_update(skip_locked=True)
+            select(RagDocument).where(RagDocument.id == rag_document_id)
         )
-        doc = result.scalar_one_or_none()
-        if not doc:
-            return False
+        return result.scalar_one_or_none()
 
-        doc.status = "processing"
-        await db.flush()
-
-        print(f"[TaskWorker] 开始处理: file_id={doc.file_id}, title={doc.title}")
-
-        try:
-            # 2. 从 S3 加载文件内容，交给 DocumentLoader 统一解析
-            content_bytes = await self._load_raw_bytes(db, doc)
-            loader = self._create_loader()
-            document = loader.load_bytes(
-                file_name=doc.title,
-                content=content_bytes,
-                metadata={"file_id": doc.file_id},
+    async def _mark_failed(self, rag_document_id: int, message: str) -> None:
+        """把 RagDocument 标记为 failed 并写入脱敏错误信息。"""
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(RagDocument)
+                .where(RagDocument.id == rag_document_id)
+                .values(status="failed", error_message=message)
             )
-
-            # 3. 空文本检测
-            if not document.content or not document.content.strip():
-                raise ValueError("文档内容为空，无法索引")
-
-            # 4. 计算 content_hash（去重用）
-            content_hash = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
-            doc.content_hash = content_hash
-
-            # 5. 如果同一 file_id 已有旧 chunks，先清理（支持重新上传）
-            store = VectorStore(db)
-            await store.delete_by_document(doc)
-
-            # 6. 跑流水线（splitter → embedder → vector_store）
-            splitter = TextSplitter()
-            embedder = Embedder()
-
-            chunks = splitter.split(document)
-            vectors = await embedder.embed(chunks)
-            await store.insert(doc, chunks, vectors)
-
-            # 成功：清除错误信息
-            doc.error_message = None
             await db.commit()
-            print(
-                f"[TaskWorker] 完成: {doc.title}, {len(chunks)} chunks"
-            )
 
-        except Exception as exc:
-            await db.rollback()
-            doc.status = "failed"
-            doc.error_message = str(exc)
-            await db.commit()
-            print(f"[TaskWorker] 失败: {doc.title}, 错误: {exc}")
+    async def _run_pipeline(self, db: AsyncSession, doc: RagDocument) -> None:
+        """加载 → 解析 → 切分 → 嵌入 → 写入。"""
+        # 1. 从 S3/RustFS 读原始字节
+        content_bytes = await self._load_raw_bytes(db, doc)
 
-        return True
+        # 2. MarkItDown 统一解析
+        loader = DocumentLoader()
+        document = loader.load_bytes(
+            file_name=doc.title,
+            content=content_bytes,
+            metadata={"file_id": doc.file_id},
+        )
+
+        # 3. 空文本检测（不可重试）
+        if not document.content or not document.content.strip():
+            raise ValueError("文档内容为空，无法索引")
+
+        # 4. 计算 content_hash
+        doc.content_hash = hashlib.sha256(
+            document.content.encode("utf-8")
+        ).hexdigest()
+
+        # 5. 清理旧 chunks（支持重复处理 / 重新上传）
+        store = VectorStore(db)
+        await store.delete_by_document(doc)
+
+        # 6. splitter → embedder → vector_store
+        splitter = TextSplitter()
+        embedder = Embedder()
+        chunks = splitter.split(document)
+        vectors = await embedder.embed(chunks)
+        await store.insert(doc, chunks, vectors)
 
     async def _load_raw_bytes(self, db: AsyncSession, doc: RagDocument) -> bytes:
         """从 S3 读取文件原始字节。"""
-        from sqlalchemy import select
         from app.models import File
         from app.core.storage import get_file_content
 
@@ -126,14 +145,34 @@ class TaskWorker:
 
         content_bytes = await get_file_content(file.storage_key)
         if content_bytes is None:
-            raise ValueError(f"S3 文件为空或不存在: {file.storage_key}")
+            raise RetryableIndexingError(
+                f"S3 文件为空或不存在: {file.storage_key}"
+            )
         return content_bytes
 
-    @staticmethod
-    def _create_loader() -> DocumentLoader:
-        """创建文档加载器（后续可注入不同解析策略）。"""
-        return DocumentLoader()
 
-    def stop(self) -> None:
-        """停止轮询。"""
-        self._running = False
+async def reset_stale_processing_documents() -> int:
+    """把遗留的 processing 状态文档重置为 pending。
+
+    用于 worker 重启 / 部署后恢复：之前崩溃时卡在 processing 的任务
+    不会被重新拾取，这里把它们重置回 pending，等待重新投递。
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            update(RagDocument)
+            .where(RagDocument.status == "processing")
+            .values(status="pending", error_message=None)
+        )
+        await db.commit()
+        return result.rowcount or 0
+
+
+async def mark_rag_document_failed(rag_document_id: int, message: str) -> None:
+    """把 RagDocument 标记为 failed（供 Celery 投递失败等场景使用）。"""
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            update(RagDocument)
+            .where(RagDocument.id == rag_document_id)
+            .values(status="failed", error_message=sanitize_error_message(message))
+        )
+        await db.commit()

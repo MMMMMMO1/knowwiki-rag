@@ -15,24 +15,23 @@ async def lifespan(app: FastAPI):
     print("Starting up...")
     check_and_create_database()
     await init_db()
-    
+
     from app.core.storage import ensure_bucket_exists
     await ensure_bucket_exists()
-    
-    print("Database and Storage initialized.")
 
-    # Start RAG TaskWorker in background
-    import asyncio
-    from rag.task_worker import TaskWorker
-    worker = TaskWorker()
-    worker_task = asyncio.create_task(worker.run())
-    print("TaskWorker started.")
+    # 恢复遗留的 processing 状态文档（worker 重启/部署后崩溃遗留），重置回 pending
+    try:
+        from rag.task_worker import reset_stale_processing_documents
+        reset_count = await reset_stale_processing_documents()
+        if reset_count:
+            print(f"Reset {reset_count} stale processing documents to pending.")
+    except Exception as exc:
+        print(f"Failed to reset stale processing documents: {exc}")
+
+    print("Database and Storage initialized.")
 
     yield
 
-    # Shutdown
-    worker.stop()
-    await worker_task
     print("Shutting down...")
 
 
