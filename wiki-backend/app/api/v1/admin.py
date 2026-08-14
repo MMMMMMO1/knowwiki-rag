@@ -339,6 +339,7 @@ async def rag_knowledge_status(
         "processing": status_map.get("processing", 0),
         "completed": status_map.get("completed", 0),
         "failed": status_map.get("failed", 0),
+        "skipped": status_map.get("skipped", 0),
         "latest_error": latest_error,
     }
 
@@ -348,14 +349,16 @@ async def rag_knowledge_sync(
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """把 failed / pending 的 RAG 文档重置为 pending，并批量重新投递 Celery 任务。"""
+    """只把 failed 的 RAG 文档重置为 pending 并重新投递 Celery 任务。
+
+    pending 已存在于队列中（或即将被 worker 消费），重复投递只会增加噪音，
+    因此手动重试仅针对 failed；skipped 表示文件已被删除，重试也无意义，同样不处理。
+    """
     from datetime import datetime, timezone
     from app.models import RagDocument
 
     result = await db.execute(
-        select(RagDocument).where(
-            RagDocument.status.in_(["failed", "pending"])
-        )
+        select(RagDocument).where(RagDocument.status == "failed")
     )
     docs = result.scalars().all()
 
@@ -390,7 +393,7 @@ async def rag_knowledge_sync(
 
     return {
         "success": True,
-        "message": f"Reset {len(docs)} documents to pending.",
+        "message": f"Reset {len(docs)} failed documents to pending.",
         "scheduled": len(docs),
         "enqueued": enqueued,
         "failed_enqueue": len(failed_ids),

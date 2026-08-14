@@ -6,7 +6,9 @@
 
 import sys
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # 若 celery 未安装，注入最小可用的假 celery 模块。
 try:
@@ -88,3 +90,49 @@ def test_enqueue_rag_document_tasks_empty() -> None:
     from rag.tasks import enqueue_rag_document_tasks
 
     assert enqueue_rag_document_tasks([]) == (0, 0)
+
+
+class _RetrySignal(Exception):
+    """模拟 Celery 的 Retry 异常（会中断任务执行）。"""
+
+
+def test_process_rag_document_retries_when_retries_left() -> None:
+    """可重试错误且还有重试机会：调用 self.retry，不 finalize。"""
+    from rag.tasks import process_rag_document
+    from rag.exceptions import RetryableIndexingError
+
+    fake_self = MagicMock()
+    fake_self.request.retries = 0  # 小于 settings.RAG_TASK_MAX_RETRIES
+    fake_self.retry.side_effect = _RetrySignal("retry")
+
+    with patch("rag.tasks.RagIndexingProcessor") as MockProcessor:
+        mock_proc = MockProcessor.return_value
+        mock_proc.process = AsyncMock(side_effect=RetryableIndexingError("S3 文件为空"))
+        mock_proc.finalize_failed = AsyncMock(return_value=None)
+
+        with pytest.raises(_RetrySignal):
+            process_rag_document(fake_self, 123)
+
+        fake_self.retry.assert_called_once()
+        mock_proc.finalize_failed.assert_not_awaited()
+
+
+def test_process_rag_document_finalizes_when_retries_exhausted() -> None:
+    """达到最大重试次数：改写成最终失败文案，不再重试。"""
+    from rag.tasks import process_rag_document
+    from rag.exceptions import RetryableIndexingError
+
+    fake_self = MagicMock()
+    fake_self.request.retries = 3  # == settings.RAG_TASK_MAX_RETRIES
+    fake_self.retry = MagicMock()
+
+    with patch("rag.tasks.RagIndexingProcessor") as MockProcessor:
+        mock_proc = MockProcessor.return_value
+        mock_proc.process = AsyncMock(side_effect=RetryableIndexingError("S3 文件为空"))
+        mock_proc.finalize_failed = AsyncMock(return_value=None)
+
+        result = process_rag_document(fake_self, 123)
+
+        assert result["status"] == "failed"
+        mock_proc.finalize_failed.assert_awaited_once_with(123, "S3 文件为空")
+        fake_self.retry.assert_not_called()

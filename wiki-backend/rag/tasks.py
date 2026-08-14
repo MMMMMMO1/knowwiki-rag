@@ -30,11 +30,15 @@ def process_rag_document(self, rag_document_id: int) -> dict:
         status = asyncio.run(processor.process(rag_document_id))
         return {"rag_document_id": rag_document_id, "status": status}
     except RetryableIndexingError as exc:
-        # 可重试错误：延迟后重试
-        raise self.retry(
-            exc=exc,
-            countdown=settings.RAG_TASK_RETRY_DELAY_SECONDS,
-        )
+        # 还有重试机会：交给 Celery 延迟后自动重试
+        if self.request.retries < settings.RAG_TASK_MAX_RETRIES:
+            raise self.retry(
+                exc=exc,
+                countdown=settings.RAG_TASK_RETRY_DELAY_SECONDS,
+            )
+        # 达到最大重试次数：改写为最终失败文案（去掉误导性的「将自动重试」）
+        asyncio.run(processor.finalize_failed(rag_document_id, str(exc)))
+        return {"rag_document_id": rag_document_id, "status": "failed"}
     except Exception:
         # 不可重试错误：状态已由 processor 标记为 failed，这里不再重试
         return {"rag_document_id": rag_document_id, "status": "failed"}

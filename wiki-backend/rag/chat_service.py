@@ -34,6 +34,7 @@ class ChatService:
         prompt: str | None = None,
         model: str | None = None,
         temperature: float | None = None,
+        chat_history: list[dict[str, str]] | None = None,
     ) -> AsyncGenerator[str, None]:
         """流式 RAG 查询：检索 → 组装 prompt → LLM 流式回答。
 
@@ -43,6 +44,8 @@ class ChatService:
             prompt: 自定义 system prompt（为空则用默认）。
             model: 自定义 LLM 模型名（为空则用配置默认）。
             temperature: 生成温度（为空则用默认 0.7）。
+            chat_history: 同会话最近若干条历史消息，
+                [{"role": "user"/"assistant", "content": "..."}]，可为空。
         """
         self.last_sources = []
 
@@ -72,10 +75,14 @@ class ChatService:
             for r in results
         ]
 
-        # 2. 组装 prompt（传入自定义 system prompt）
+        # 2. 组装 prompt（传入自定义 system prompt 与会话历史）
         context = retriever.format_context(results)
         builder = PromptBuilder(system_prompt=prompt)
-        messages = builder.build(question=question, context=context)
+        messages = builder.build(
+            question=question,
+            context=context,
+            chat_history=chat_history,
+        )
 
         # 3. 调 LLM（传入自定义 model 与 temperature）
         llm = LLM(model=model)
@@ -90,6 +97,7 @@ class ChatService:
         prompt: str | None = None,
         model: str | None = None,
         temperature: float | None = None,
+        chat_history: list[dict[str, str]] | None = None,
     ) -> str:
         """非流式 RAG 查询，返回完整回答。
 
@@ -99,6 +107,7 @@ class ChatService:
             prompt: 自定义 system prompt（为空则用默认）。
             model: 自定义 LLM 模型名（为空则用配置默认）。
             temperature: 生成温度（为空则用默认 0.7）。
+            chat_history: 同会话最近若干条历史消息，可为空。
 
         Returns:
             LLM 的完整回答文本。
@@ -116,7 +125,11 @@ class ChatService:
 
         context = retriever.format_context(results)
         builder = PromptBuilder(system_prompt=prompt)
-        messages = builder.build(question=question, context=context)
+        messages = builder.build(
+            question=question,
+            context=context,
+            chat_history=chat_history,
+        )
 
         llm = LLM(model=model)
         temp = temperature if temperature is not None else 0.7

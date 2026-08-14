@@ -107,6 +107,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
         processing: number;
         completed: number;
         failed: number;
+        skipped: number;
         latest_error?: string | null;
     } | null>(null);
     const [syncStatusLoading, setSyncStatusLoading] = useState(false);
@@ -414,6 +415,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
                     <Tag color="blue">排队中 {pendingCount}</Tag>
                     <Tag color="cyan">处理中 {processingCount}</Tag>
                     <Tag color={failedCount > 0 ? 'red' : 'default'}>失败 {failedCount}</Tag>
+                    <Tag color="default">已跳过 {syncStatus?.skipped ?? 0}</Tag>
                     <Tag color="green">已完成 {syncStatus?.completed ?? 0}</Tag>
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -425,7 +427,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
                             onClick={fetchSyncStatus}
                         />
                     </Tooltip>
-                    <Tooltip title="重试待处理和失败任务">
+                    <Tooltip title="重试失败任务">
                         <Button
                             type="text"
                             size="small"

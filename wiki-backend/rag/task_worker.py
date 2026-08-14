@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal
 from app.models import RagDocument
 from rag.embedding import Embedder
-from rag.exceptions import RetryableIndexingError
+from rag.exceptions import RetryableIndexingError, SkipIndexingError
 from rag.loader import DocumentLoader
 from rag.splitter import TextSplitter
 from rag.vector_store import VectorStore
@@ -62,7 +62,7 @@ class RagIndexingProcessor:
         返回 "completed" / "failed" / "skipped"。
         - completed: 索引完成
         - failed: 最终失败（不可重试），状态已写 failed
-        - skipped: 任务不存在或已被处理（重复消息），不重复处理
+        - skipped: 任务不存在、已被处理（重复消息），或文件已被删除，不重复处理
         可重试错误会抛 RetryableIndexingError（状态已写 failed 并注明将自动重试）。
         """
         # 1. 原子抢占：只允许 pending/failed → processing（防止重复消息并发处理）
@@ -83,6 +83,13 @@ class RagIndexingProcessor:
                 doc.failed_at = None
                 await db.commit()
                 return "completed"
+            except SkipIndexingError as exc:
+                # 文件已被删除等：跳过，不算失败，也不自动重试
+                await db.rollback()
+                await self._mark_skipped(
+                    rag_document_id, sanitize_error_message(str(exc))
+                )
+                return "skipped"
             except Exception as exc:
                 # 失败：回滚当前事务，写 failed + 脱敏错误（可重试则注明）
                 await db.rollback()
@@ -144,6 +151,40 @@ class RagIndexingProcessor:
             )
             await db.commit()
 
+    async def _mark_skipped(self, rag_document_id: int, message: str) -> None:
+        """把 RagDocument 标记为 skipped：不算失败、不自动重试、不累加 retry_count。"""
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(RagDocument)
+                .where(RagDocument.id == rag_document_id)
+                .values(
+                    status="skipped",
+                    error_message=message,
+                    failed_at=None,
+                )
+            )
+            await db.commit()
+
+    async def finalize_failed(self, rag_document_id: int, message: str) -> None:
+        """重试耗尽后的最终失败写入 —— 只改写错误文案，不重复累加 retry_count。
+
+        调用时机：Celery 已达到最大重试次数，不再重试。
+        process() 里已把状态置 failed 并 retry_count +1，这里只把
+        「【将自动重试】...」改写为「已达到最大重试次数：...」。
+        """
+        final_message = f"已达到最大重试次数：{sanitize_error_message(message)}"
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(RagDocument)
+                .where(RagDocument.id == rag_document_id)
+                .values(
+                    status="failed",
+                    error_message=final_message,
+                    failed_at=_utcnow(),
+                )
+            )
+            await db.commit()
+
     async def _run_pipeline(self, db: AsyncSession, doc: RagDocument) -> None:
         """加载 → 解析 → 切分 → 嵌入 → 写入。"""
         # 1. 从 S3/RustFS 读原始字节
@@ -182,11 +223,15 @@ class RagIndexingProcessor:
         from app.models import File
         from app.core.storage import get_file_content
 
+        if doc.file_id is None:
+            # 文件记录已被删除（FK SET NULL）：跳过，不算失败
+            raise SkipIndexingError("Wiki 文件已被删除（file_id 为空）")
+
         result = await db.execute(select(File).where(File.id == doc.file_id))
         file = result.scalar_one_or_none()
         if not file:
-            # 文件已被删除（或 file_id 已被置空）：最终失败，不重试
-            raise ValueError(f"Wiki 文件已被删除: file_id={doc.file_id}")
+            # 文件已被删除：旧队列消息应安全跳过，而不是制造失败噪音
+            raise SkipIndexingError(f"Wiki 文件已被删除: file_id={doc.file_id}")
 
         content_bytes = await get_file_content(file.storage_key)
         if content_bytes is None:

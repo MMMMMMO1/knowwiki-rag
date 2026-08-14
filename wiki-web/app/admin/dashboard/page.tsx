@@ -537,6 +537,7 @@ export default function AdminDashboard() {
                     else if (status === 'failed') { color = 'red'; text = '失败'; }
                     else if (status === 'pending') { color = 'blue'; text = '排队中'; }
                     else if (status === 'processing') { color = 'orange'; text = '处理中'; }
+                    else if (status === 'skipped') { color = 'default'; text = '已跳过'; }
                     return <Tag color={color}>{text}</Tag>;
                 }
             },
@@ -585,7 +586,7 @@ export default function AdminDashboard() {
                     </Title>
                     <Space>
                         <Button type="primary" onClick={triggerManualSync} loading={syncRetrying} icon={<SyncOutlined spin={syncRetrying} />} style={{ background: '#cc785c', border: 'none', borderRadius: 8 }}>
-                            重试同步队列
+                            重试失败任务
                         </Button>
                         <Button onClick={fetchSyncHistory} icon={<ReloadOutlined />} style={{ borderRadius: 8 }} />
                     </Space>

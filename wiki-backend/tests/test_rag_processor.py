@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-from rag.exceptions import RetryableIndexingError
+from rag.exceptions import RetryableIndexingError, SkipIndexingError
 from rag.task_worker import (
     RagIndexingProcessor,
     reset_stale_processing_documents,
@@ -156,17 +156,81 @@ def test_processor_retryable_error_reraises_retryable() -> None:
     assert mark_failed.await_args.kwargs.get("retryable") is True
 
 
-def test_load_raw_bytes_deleted_file_is_final() -> None:
-    """文件已被删除（file_id 无对应 File）：最终失败，抛 ValueError。"""
+def test_load_raw_bytes_deleted_file_is_skipped() -> None:
+    """文件已被删除（file_id 无对应 File）：抛 SkipIndexingError，而非失败。"""
     doc = _make_doc()
     session = _FakeSession(None)  # scalar_one_or_none 返回 None → 文件不存在
 
     processor = RagIndexingProcessor()
     try:
         asyncio.run(processor._load_raw_bytes(session, doc))
-        assert False, "应抛 ValueError"
-    except ValueError as e:
+        assert False, "应抛 SkipIndexingError"
+    except SkipIndexingError as e:
         assert "已被删除" in str(e)
+
+
+def test_load_raw_bytes_null_file_id_is_skipped() -> None:
+    """file_id 为 null（文件记录被删后 FK SET NULL）：抛 SkipIndexingError。"""
+    doc = _make_doc()
+    doc.file_id = None
+    session = _FakeSession(None)
+
+    processor = RagIndexingProcessor()
+    try:
+        asyncio.run(processor._load_raw_bytes(session, doc))
+        assert False, "应抛 SkipIndexingError"
+    except SkipIndexingError as e:
+        assert "已被删除" in str(e)
+
+
+def test_processor_skip_error_marks_skipped_and_returns_skipped() -> None:
+    """文件已被删除：process() 标记 skipped，返回 "skipped"，不重试。"""
+    doc = _make_doc(status="processing")
+    ctx, _ = _patch_pipeline_session(doc)
+
+    async def fake_pipeline(self, db, d):
+        raise SkipIndexingError("Wiki 文件已被删除: file_id=10")
+
+    with ctx, \
+            patch.object(RagIndexingProcessor, "_claim_processing", _claim_true), \
+            patch.object(RagIndexingProcessor, "_run_pipeline", fake_pipeline), \
+            patch.object(RagIndexingProcessor, "_mark_skipped", new_callable=AsyncMock) as mark_skipped:
+        processor = RagIndexingProcessor()
+        result = asyncio.run(processor.process(1))
+
+    assert result == "skipped"
+    mark_skipped.assert_awaited_once()
+
+
+def test_finalize_failed_overwrites_message_without_incrementing_retry() -> None:
+    """重试耗尽后的最终失败：只改写文案，不重复累加 retry_count。"""
+    captured = {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def execute(self, stmt, *args, **kwargs):
+            captured["stmt"] = stmt
+            return None
+
+        async def commit(self):
+            pass
+
+    processor = RagIndexingProcessor()
+    with patch("rag.task_worker.AsyncSessionLocal", return_value=FakeSession()):
+        asyncio.run(processor.finalize_failed(1, "Embedding API 暂时不可用: HTTP 429"))
+
+    compiled = captured["stmt"].compile(compile_kwargs={"literal_binds": True})
+    sql = str(compiled)
+    # 文案改为「已达到最大重试次数」，且不再是「将自动重试」
+    assert "已达到最大重试次数" in sql
+    assert "将自动重试" not in sql
+    # finalize_failed 不写 retry_count，避免与 process() 里的 +1 双重累加
+    assert "retry_count" not in sql
 
 
 class _FakeStaleResult:

@@ -230,15 +230,19 @@ GET /api/v1/admin/knowledge/status
   "processing": 1,
   "completed": 42,
   "failed": 1,
+  "skipped": 3,
   "latest_error": "【将自动重试】Embedding API 暂时不可用: HTTP 429"
 }
 ```
+
+> `skipped` 表示任务被跳过（例如文件已被删除），不属于失败，不会计入 failed。
 
 ---
 
 ### RAG 知识库手动重试
 
-把 `failed` / `pending` 的文档重置为 `pending`（retry_count 清零），并批量重新投递 Celery 任务。
+只把 `failed` 的文档重置为 `pending`（retry_count 清零），并批量重新投递 Celery 任务。
+`pending` 已在队列中，`skipped`（文件已删除）重试无意义，均不处理。
 
 ```http
 POST /api/v1/admin/knowledge/sync
@@ -248,7 +252,7 @@ POST /api/v1/admin/knowledge/sync
 ```json
 {
   "success": true,
-  "message": "Reset 3 documents to pending.",
+  "message": "Reset 3 failed documents to pending.",
   "scheduled": 3,
   "enqueued": 3,
   "failed_enqueue": 0
@@ -319,3 +323,19 @@ GET    /api/v1/admin/chat-sessions/{session_id}/messages
 docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
 docker compose logs redis       # 查看 Redis 日志
 ```
+
+## 升级与构建说明
+
+- **数据库迁移**：后端启动时会自动对已有数据库执行幂等迁移
+  （`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，见
+  `migrations/0001_add_rag_queue_fields.sql` 与 `app/core/database.py` 的
+  `_apply_rag_queue_migration`）。已有数据库无需手动执行 SQL，也不会重复加列。
+- **前端构建**：前端改动需重新构建：
+  ```bash
+  cd wiki-web && npm run lint && npm run build
+  ```
+  或通过 Compose 重新构建镜像：
+  ```bash
+  ./start_wiki.sh restart
+  # 等价于 docker compose -f wiki-backend/anythingllm/compose.yml up -d --build
+  ```

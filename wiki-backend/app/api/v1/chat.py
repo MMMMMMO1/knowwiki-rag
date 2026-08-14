@@ -35,7 +35,24 @@ async def chat_stream(
     - textResponse: 完成，附带 sources
     - abort: 错误
     """
-    # 1. 记录用户消息
+    # 1. 查询同会话最近历史（先于写入当前消息，避免把当前问题算进历史）。
+    #    与 main 的 AnythingLLM thread 行为对齐：同 session 保留最近若干条上下文。
+    HISTORY_LIMIT = 10
+    history_result = await db.execute(
+        select(models.ChatLog)
+        .where(models.ChatLog.user_id == current_user.id)
+        .where(models.ChatLog.session_id == request.session_id)
+        .order_by(models.ChatLog.created_at.desc())
+        .limit(HISTORY_LIMIT)
+    )
+    recent_logs = list(history_result.scalars().all())
+    recent_logs.reverse()  # 转回时间正序，再喂给 LLM
+    chat_history = [
+        {"role": log.role, "content": log.content}
+        for log in recent_logs
+    ]
+
+    # 2. 记录用户消息
     user_msg = models.ChatLog(
         user_id=current_user.id,
         session_id=request.session_id,
@@ -58,6 +75,7 @@ async def chat_stream(
                 prompt=request.prompt,
                 model=request.model,
                 temperature=request.temperature,
+                chat_history=chat_history,
             ):
                 accumulated.append(token)
                 yield f"data: {json.dumps({'type': 'textResponseChunk', 'textResponse': token, 'sources': [], 'close': False})}\n\n"
@@ -66,7 +84,7 @@ async def chat_stream(
             full_text = "".join(accumulated)
             yield f"data: {json.dumps({'type': 'textResponse', 'textResponse': full_text, 'sources': service.last_sources, 'close': True})}\n\n"
 
-            # 2. 记录助手回复
+            # 3. 记录助手回复
             if full_text.strip():
                 assistant_msg = models.ChatLog(
                     user_id=current_user.id,

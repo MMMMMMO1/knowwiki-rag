@@ -58,24 +58,29 @@
 ```
 pending ──worker 消费──> processing ──成功──> completed
    │                        │
-   │                        └─失败（可重试）──> Celery 延迟重试（retry_count +1）
-   │                        └─失败（不可重试）──> failed（可手动重试）
-   └── /knowledge/sync 手动重试：failed/pending 重置为 pending，retry_count 清零
+   │                        ├─失败（可重试）──> Celery 延迟重试（retry_count +1）
+   │                        │      └─达到 max_retries──> failed（文案：已达到最大重试次数）
+   │                        ├─失败（不可重试）──> failed（可手动重试）
+   │                        └─文件已被删除──> skipped（不算失败、不重试）
+   └── /knowledge/sync 手动重试：仅 failed 重置为 pending，retry_count 清零
 ```
 
 `rag_documents` 状态字段：
 
 | 字段 | 含义 |
 |------|------|
-| status | pending / processing / completed / failed |
+| status | pending / processing / completed / failed / skipped |
 | retry_count | 累计重试次数（手动重试时清零） |
 | chunk_count | 索引生成的分块数 |
-| error_message | 脱敏后的错误信息（不含 API Key） |
+| error_message | 脱敏后的错误信息（不含 API Key；skipped 时为跳过原因） |
 | content_hash | 文档内容 SHA256 |
 | queued_at | 入队时间 |
 | processing_started_at | worker 开始处理时间 |
 | completed_at | 完成时间 |
 | failed_at | 失败时间 |
+
+> **skipped 语义**：文件被删除后，旧队列消息到达时不会把任务标记为 failed，
+> 而是置为 skipped，管理端不将其计入失败数，也不参与自动重试。
 
 ## 启动与排查
 
@@ -87,6 +92,9 @@ pending ──worker 消费──> processing ──成功──> completed
 docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
 docker compose logs redis       # 查看 Redis 日志
 ```
+
+**已有数据库升级**：后端启动时自动执行幂等迁移
+（`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`），无需手动跑 SQL，也不会重复加列。
 
 ---
 
