@@ -62,3 +62,29 @@ def test_process_rag_document_task_registered() -> None:
 
     assert process_rag_document.name == "rag.tasks.process_rag_document"
     assert process_rag_document.max_retries >= 1
+
+
+def test_enqueue_rag_document_tasks_counts_batch() -> None:
+    """批量投递：返回 (成功数量, 失败数量)。"""
+    from rag.tasks import enqueue_rag_document_tasks, enqueue_rag_document_task
+
+    # 第 2 个投递失败
+    original = enqueue_rag_document_task
+    calls = {"n": 0}
+
+    def fake_enqueue(rid: int) -> bool:
+        calls["n"] += 1
+        return calls["n"] != 2
+
+    with patch("rag.tasks.enqueue_rag_document_task", side_effect=fake_enqueue):
+        enqueued, failed = enqueue_rag_document_tasks([1, 2, 3])
+
+    assert enqueued == 2
+    assert failed == 1
+
+
+def test_enqueue_rag_document_tasks_empty() -> None:
+    """空列表：直接返回 (0, 0)。"""
+    from rag.tasks import enqueue_rag_document_tasks
+
+    assert enqueue_rag_document_tasks([]) == (0, 0)

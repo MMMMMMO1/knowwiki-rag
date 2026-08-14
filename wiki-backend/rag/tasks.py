@@ -9,7 +9,8 @@ import asyncio
 
 from app.core.config import settings
 from rag.celery_app import celery_app
-from rag.task_worker import RagIndexingProcessor, RetryableIndexingError
+from rag.exceptions import RetryableIndexingError
+from rag.task_worker import RagIndexingProcessor
 
 
 @celery_app.task(
@@ -26,8 +27,8 @@ def process_rag_document(self, rag_document_id: int) -> dict:
     processor = RagIndexingProcessor()
 
     try:
-        asyncio.run(processor.process(rag_document_id))
-        return {"rag_document_id": rag_document_id, "status": "completed"}
+        status = asyncio.run(processor.process(rag_document_id))
+        return {"rag_document_id": rag_document_id, "status": status}
     except RetryableIndexingError as exc:
         # 可重试错误：延迟后重试
         raise self.retry(
@@ -50,3 +51,18 @@ def enqueue_rag_document_task(rag_document_id: int) -> bool:
         return True
     except Exception:
         return False
+
+
+def enqueue_rag_document_tasks(rag_document_ids: list[int]) -> tuple[int, int]:
+    """批量投递多个 RAG 入库任务。
+
+    返回 (成功投递数量, 投递失败数量)。
+    """
+    enqueued = 0
+    failed = 0
+    for rag_document_id in rag_document_ids:
+        if enqueue_rag_document_task(rag_document_id):
+            enqueued += 1
+        else:
+            failed += 1
+    return enqueued, failed

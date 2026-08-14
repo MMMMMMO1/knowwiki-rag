@@ -71,18 +71,6 @@ class FolderTreeItem(BaseModel):
         from_attributes = True
 
 
-# ============== Sync Schemas ==============
-
-class SyncResponse(BaseModel):
-    """Sync operation response."""
-    success: bool
-    message: str
-    created: int = 0
-    updated: int = 0
-    deleted: int = 0
-    skipped: int = 0
-
-
 # ============== Upload Schemas ==============
 
 class UploadResponse(BaseModel):

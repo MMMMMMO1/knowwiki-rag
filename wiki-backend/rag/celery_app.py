@@ -32,6 +32,18 @@ celery_app.conf.update(
     # 失败任务不立即丢弃，配合 task 内的 max_retries 重试
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # broker 快速失败：Redis 不可用时，投递在几秒内报错而不是长时间挂起
+    broker_connection_timeout=3,
+    broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        "socket_connect_timeout": 3,
+        "socket_timeout": 3,
+        "socket_keepalive": True,
+    },
+    result_backend_transport_options={
+        "socket_connect_timeout": 3,
+        "socket_timeout": 3,
+    },
 )
 
 # 让 celery 能找到任务（worker 启动时通过 -A rag.celery_app:celery_app 自动导入）

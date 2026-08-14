@@ -19,12 +19,17 @@ async def lifespan(app: FastAPI):
     from app.core.storage import ensure_bucket_exists
     await ensure_bucket_exists()
 
-    # 恢复遗留的 processing 状态文档（worker 重启/部署后崩溃遗留），重置回 pending
+    # 恢复遗留的 processing 状态文档（worker 重启/部署后崩溃遗留），重置回 pending 并重新投递
     try:
         from rag.task_worker import reset_stale_processing_documents
-        reset_count = await reset_stale_processing_documents()
-        if reset_count:
-            print(f"Reset {reset_count} stale processing documents to pending.")
+        stale_ids = await reset_stale_processing_documents()
+        if stale_ids:
+            from rag.tasks import enqueue_rag_document_tasks
+            enqueued, failed = enqueue_rag_document_tasks(stale_ids)
+            print(
+                f"Reset {len(stale_ids)} stale processing documents, "
+                f"re-enqueued {enqueued}, enqueue failed {failed}."
+            )
     except Exception as exc:
         print(f"Failed to reset stale processing documents: {exc}")
 

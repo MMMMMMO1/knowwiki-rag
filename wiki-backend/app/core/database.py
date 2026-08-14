@@ -35,6 +35,28 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 
+# 与 migrations/0001_add_rag_queue_fields.sql 保持一致，便于已有数据库无感升级。
+_RAG_QUEUE_MIGRATION_STATEMENTS = [
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ",
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ",
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ",
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS ix_rag_documents_status ON rag_documents (status)",
+    "CREATE INDEX IF NOT EXISTS ix_rag_documents_retry_count ON rag_documents (retry_count)",
+]
+
+
+async def _apply_rag_queue_migration(conn) -> None:
+    """幂等补齐 rag_documents 的消息队列列（对新建表为 no-op）。"""
+    try:
+        for statement in _RAG_QUEUE_MIGRATION_STATEMENTS:
+            await conn.execute(text(statement))
+    except ProgrammingError:
+        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
+        pass
+
+
 def check_and_create_database() -> bool:
     """
     Check if the database exists, create it if not.
@@ -96,6 +118,8 @@ async def init_db():
         # 确保 pgvector 扩展已启用
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        # 幂等迁移：为已有数据库补齐消息队列新增列（create_all 不会修改已存在的表）
+        await _apply_rag_queue_migration(conn)
     print("Database tables initialized.")
 
     # Seed default admin user if no users exist

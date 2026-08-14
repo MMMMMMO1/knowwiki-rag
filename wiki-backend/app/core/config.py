@@ -60,7 +60,6 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     TOP_K: int = 5
-    RAG_SYNC_MAX_RETRIES: int = 3
     SYSTEM_PROMPT: str = ""
 
     # Redis / Celery 消息队列设置（RAG 入库任务调度）

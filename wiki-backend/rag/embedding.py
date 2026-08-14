@@ -8,6 +8,7 @@ Embedding 模块 —— 调用 OpenAI 兼容 API 将文本转为向量。
 import httpx
 
 from app.core.config import settings
+from rag.exceptions import RetryableIndexingError
 from rag.schemas import Chunk
 
 
@@ -48,6 +49,9 @@ class Embedder:
         """将 Chunk 列表转换为向量列表，顺序与输入一一对应。
 
         按 batch_size 分批请求，对超过 max_chars 的文本截断。
+
+        可重试错误（限流 429、服务端 5xx、超时、连接失败）抛 RetryableIndexingError；
+        维度不匹配、认证失败等抛最终错误。
         """
         if not chunks:
             return []
@@ -71,28 +75,47 @@ class Embedder:
                         },
                         timeout=120.0,
                     )
-                    response.raise_for_status()
+
+                    # 限流 / 服务端错误：可重试
+                    if response.status_code == 429 or response.status_code >= 500:
+                        raise RetryableIndexingError(
+                            f"Embedding API 暂时不可用: HTTP {response.status_code}"
+                        )
+
+                    # 其余非 2xx（如 401 认证失败）：最终失败
+                    if response.status_code >= 400:
+                        raise RuntimeError(
+                            f"Embedding API 拒绝请求: HTTP {response.status_code}"
+                        )
+
                     result = response.json()
 
-                    batch_embeddings = sorted(
-                        result["data"], key=lambda x: x["index"]
-                    )
-                    for item in batch_embeddings:
-                        vec = item["embedding"]
-                        if len(vec) != settings.VECTOR_DIM:
-                            raise RuntimeError(
-                                f"Embedding 维度不匹配: 返回 {len(vec)} 维，"
-                                f"期望 {settings.VECTOR_DIM} 维。"
-                                f"请检查 EMBEDDING_MODEL={self.model} 是否输出 "
-                                f"{settings.VECTOR_DIM} 维向量。"
-                            )
-                        all_embeddings.append(vec)
+                except RetryableIndexingError:
+                    raise
+                except RuntimeError:
+                    # 非 2xx 的最终失败（如 401 认证失败），不要转成可重试错误
+                    raise
+                except httpx.TimeoutException as exc:
+                    raise RetryableIndexingError(f"Embedding API 超时: {exc}") from exc
+                except httpx.TransportError as exc:
+                    raise RetryableIndexingError(f"Embedding API 连接失败: {exc}") from exc
+                except Exception as exc:
+                    raise RetryableIndexingError(
+                        f"Embedding 失败: model={self.model}, batch={batch_num}, error={exc}"
+                    ) from exc
 
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Embedding 失败: model={self.model}, "
-                        f"batch={batch_num}, batch_size={len(batch)}, "
-                        f"error={e}"
-                    )
+                batch_embeddings = sorted(
+                    result["data"], key=lambda x: x["index"]
+                )
+                for item in batch_embeddings:
+                    vec = item["embedding"]
+                    if len(vec) != settings.VECTOR_DIM:
+                        raise ValueError(
+                            f"Embedding 维度不匹配: 返回 {len(vec)} 维，"
+                            f"期望 {settings.VECTOR_DIM} 维。"
+                            f"请检查 EMBEDDING_MODEL={self.model} 是否输出 "
+                            f"{settings.VECTOR_DIM} 维向量。"
+                        )
+                    all_embeddings.append(vec)
 
         return all_embeddings

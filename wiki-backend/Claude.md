@@ -1,5 +1,9 @@
 # Wiki App 项目架构需求说明书 (PRD for AI Agent)
 
+> ⚠️ **历史文档**：本文档描述的是早期基于磁盘扫描（`Node` 模型 + `/admin/sync`）的架构。
+> 当前实现已改为 RustFS/S3 存储 + `Folder`/`File` 模型 + 自研 RAG 模块（`wiki-backend/rag/`），
+> 入库走 Redis + Celery 消息队列。请以 `api.md` 与 `RAG.md` 为准。
+
 ## 1. 系统概述
 
 * **技术栈**: FastAPI (Backend) + Next.js App Router (Frontend) + SQLAlchemy (ORM).

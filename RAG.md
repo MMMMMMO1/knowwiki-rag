@@ -180,7 +180,7 @@ class TextSplitter:
 
 ## 核心
 
-Embedder 把 Chunk.text → list[float]（1536维）。语义相近的文本向量距离也近，这是检索的基础。
+Embedder 把 Chunk.text → list[float]（1024 维，阿里 text-embedding-v3）。语义相近的文本向量距离也近，这是检索的基础。
 
 AnythingLLM 有 20+ provider，但所有 OpenAI 兼容的代码都一样：POST /v1/embeddings。
 
@@ -203,7 +203,7 @@ class Embedder:
 
 ```sql
 rag_documents(id, file_id FK, doc_id, title, content_hash, status, chunk_count)
-rag_chunks(id, document_id FK, chunk_id, text, embedding vector(1536), metadata JSONB)
+rag_chunks(id, document_id FK, chunk_id, text, embedding vector(1024), metadata JSONB)
 ```
 
 ```python
@@ -237,29 +237,32 @@ class Retriever:
 
 ---
 
-# 第六步：异步入库
+# 第六步：异步入库（消息队列）
 
-两个新模块（不使用消息队列）：
+三个模块协作，不再使用 while 轮询：
 
 ```python
+# ingest_service.py —— 只创建/重置 RagDocument(status=pending)，不跑流水线
 class IngestService:
     async def ingest(self, file_id):
-        # 只创建 RagDocument(status=pending)，不跑流水线
         doc = RagDocument(file_id=file_id, title=file.title, status="pending")
         db.add(doc); return doc
 
-class TaskWorker:
-    async def run(self):
-        while True:
-            doc = await get_pending_document()  # with_for_update(skip_locked=True)
-            if not doc: await sleep(1); continue
-            doc.status = "processing"
-            content = await get_file_content(storage_key)
-            document = loader.load_bytes(title, content)  # 统一入口
-            chunks = splitter.split(document)
-            vectors = await embedder.embed(chunks)
-            await store.insert(doc, chunks, vectors)
-            doc.status = "completed"
+# tasks.py —— Celery 任务，接收 rag_document_id，调用处理器
+@celery_app.task(bind=True, max_retries=..., name="rag.tasks.process_rag_document")
+def process_rag_document(self, rag_document_id):
+    status = asyncio.run(RagIndexingProcessor().process(rag_document_id))
+    return {"rag_document_id": rag_document_id, "status": status}
+
+# task_worker.py —— 单任务处理器（无轮询），原子抢占 pending/failed → processing
+class RagIndexingProcessor:
+    async def process(self, rag_document_id):
+        if not await self._claim_processing(rag_document_id):
+            return "skipped"
+        async with AsyncSessionLocal() as db:
+            doc = await self._load_document(db, rag_document_id)
+            await self._run_pipeline(db, doc)
+            doc.status = "completed"; await db.commit()
 ```
 
 ---

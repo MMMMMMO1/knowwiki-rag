@@ -4,11 +4,12 @@ A FastAPI backend for a wiki application with file-based content management.
 
 ## Features
 
-- 🗂️ **Hybrid Storage** - Files on disk + PostgreSQL index
-- 🔄 **Directory Sync** - Auto-scan markdown files to database
-- 📁 **Hierarchical Structure** - Self-referential Node model
+- 🗂️ **Hybrid Storage** - Files on RustFS/S3 + PostgreSQL index
+- 🔍 **自研 RAG 知识库** - 文档解析 → 切分 → 嵌入 → 向量检索 → LLM 问答
+- 📁 **Hierarchical Structure** - Self-referential Folder/File model
 - 🔐 **Admin Authentication** - Bearer token for admin APIs
 - 🚀 **Async Support** - Built with async SQLAlchemy
+- ⚙️ **消息队列入库** - Redis + Celery 异步消费，失败自动重试
 
 ## Tech Stack
 
@@ -16,7 +17,8 @@ A FastAPI backend for a wiki application with file-based content management.
 |-----------|------------|
 | Framework | FastAPI |
 | ORM | SQLAlchemy 2.0 (async) |
-| Database | PostgreSQL |
+| Database | PostgreSQL 17 + pgvector |
+| Queue | Redis + Celery |
 | Package Manager | uv |
 
 ## Quick Start
@@ -55,19 +57,28 @@ uv run uvicorn app.main:app --reload
 ```
 wiki-backend/
 ├── app/
-│   ├── main.py           # FastAPI entry
-│   ├── models.py         # Node model
+│   ├── main.py           # FastAPI entry（含启动时重置僵尸入库任务）
+│   ├── models.py         # Folder/File/User/RagDocument/RagChunk 模型
 │   ├── schemas.py        # Pydantic schemas
 │   ├── crud.py           # DB operations
-│   ├── scanner.py        # Directory sync
+│   ├── scanner.py        # 文件路径规范化（normalize_slug 等辅助函数）
 │   ├── api/v1/           # API routes
-│   │   ├── nodes.py      # Public endpoints
-│   │   └── admin.py      # Protected endpoints
+│   │   ├── nodes.py      # Public endpoints（目录树/路径解析）
+│   │   ├── auth.py       # 登录 / 当前用户
+│   │   └── admin.py      # 上传/删除/知识库状态/同步历史/用户管理
 │   └── core/
 │       ├── config.py     # Settings
 │       ├── database.py   # DB connection
 │       └── security.py   # Auth
-├── wiki_storage/         # Markdown files
 ├── rag/                  # 自研 RAG 文档索引与问答模块
-└── app/core/config.py    # Settings loaded from repository root .env
+│   ├── celery_app.py     # Celery app 配置（broker/result backend/路由）
+│   ├── tasks.py          # process_rag_document 任务 + 投递辅助
+│   ├── task_worker.py    # RagIndexingProcessor 单任务处理器
+│   ├── ingest_service.py # 创建/重置 RagDocument（幂等）
+│   ├── loader.py         # MarkItDown 文档解析
+│   ├── splitter.py       # 文本切分
+│   ├── embedding.py      # Embedding 向量化
+│   ├── vector_store.py   # pgvector 写入与检索
+│   └── retriever.py      # 检索编排
+└── migrations/           # SQL 迁移脚本
 ```

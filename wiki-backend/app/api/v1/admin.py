@@ -202,13 +202,16 @@ async def upload_file(
     # 投递 Celery 入库任务到 Redis，由 rag-worker 异步消费
     from rag.tasks import enqueue_rag_document_task
     queued = enqueue_rag_document_task(rag_doc.id)
-    if not queued:
+    if queued:
+        upload_message = f"File uploaded successfully: {full_path}. RAG indexing task queued."
+    else:
         from rag.task_worker import mark_rag_document_failed
         await mark_rag_document_failed(rag_doc.id, "Celery 任务投递失败（Redis 不可用）")
+        upload_message = f"文件上传成功，但知识库入队失败: {full_path}"
 
     return UploadResponse(
         success=True,
-        message=f"File uploaded successfully: {full_path}. RAG indexing task queued.",
+        message=upload_message,
         file=FileResponse(
             id=file_node.id,
             folder_id=file_node.folder_id,

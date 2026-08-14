@@ -2,11 +2,47 @@
 
 Base URL: `http://localhost:8000`
 
-## Public Endpoints
+---
+
+## 认证
+
+### 登录
+
+```http
+POST /api/v1/auth/login
+```
+
+**Body:**
+```json
+{
+  "username": "admin",
+  "password": "your-password"
+}
+```
+
+**Response:**
+```json
+{
+  "access_token": "<JWT>",
+  "username": "admin",
+  "role": "admin"
+}
+```
+
+### 当前用户
+
+```http
+GET /api/v1/auth/me
+Authorization: Bearer <JWT>
+```
+
+---
+
+## Public Endpoints（无需认证）
 
 ### Get Directory Tree
 
-Returns the complete nested directory structure.
+返回完整嵌套目录结构。
 
 ```http
 GET /api/v1/nodes/tree
@@ -28,7 +64,7 @@ GET /api/v1/nodes/tree
         "title": "Guide",
         "full_path": "docs/guide",
         "node_type": "FOLDER",
-        "children": [...]
+        "children": []
       }
     ]
   }
@@ -39,7 +75,7 @@ GET /api/v1/nodes/tree
 
 ### Resolve Path
 
-Get node information and file content by path.
+按路径获取节点信息与文件内容。
 
 ```http
 GET /api/v1/nodes/resolve/{path}
@@ -48,7 +84,7 @@ GET /api/v1/nodes/resolve/{path}
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
-| path | string | Logical path (e.g., `docs/guide/intro`) |
+| path | string | 逻辑路径（如 `docs/guide/intro`） |
 
 **Response:**
 ```json
@@ -65,55 +101,22 @@ GET /api/v1/nodes/resolve/{path}
 ```
 
 **Content Types:**
-| File Extension | content_type | Description |
-|----------------|--------------|-------------|
-| `.md`, `.txt`, `.html` | `"text"` | Raw text content |
-| `.pdf`, `.docx` | `"base64"` | Base64 encoded binary |
+| 扩展名 | content_type | 说明 |
+|--------|--------------|------|
+| `.md`, `.txt`, `.html` | `"text"` | 原始文本 |
+| `.pdf`, `.docx` | `"base64"` | Base64 编码的二进制 |
 
 ---
 
-## Admin Endpoints (Protected)
+## Admin Endpoints（需 Bearer 认证）
 
-> ⚠️ All admin endpoints require Bearer token authentication (dynamic JWT token obtained from `/login`).
-
-**Header:**
-```
-Authorization: Bearer <JWT_TOKEN>
-```
-
----
-
-### Sync Directory
-
-Trigger a scan of WIKI_ROOT and sync to database.
-
-```http
-POST /api/v1/admin/sync
-```
-
-**Example:**
-```bash
-curl -X POST http://localhost:8000/api/v1/admin/sync \
-  -H "Authorization: Bearer your-jwt-token"
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Sync completed successfully",
-  "created": 5,
-  "updated": 0,
-  "deleted": 0,
-  "skipped": 10
-}
-```
+> ⚠️ 所有管理端接口都需要 `Authorization: Bearer <JWT>`。
 
 ---
 
 ### Upload File
 
-Upload a markdown file to the wiki.
+上传文件到 Wiki。文件写入 RustFS/S3 后，会创建 `rag_documents` 记录并异步投递 Celery 入库任务。
 
 ```http
 POST /api/v1/admin/upload
@@ -123,62 +126,168 @@ Content-Type: multipart/form-data
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
-| file | file | File to upload (.md, .html, .docx, .txt, .pdf) |
-| parent_id | int | Optional parent folder ID |
+| file | file | 允许 `.md`, `.html`, `.docx`, `.txt`, `.pdf` |
+| folder_id | int | 可选，父文件夹 ID（0 表示根目录） |
 
 **Example:**
 ```bash
 curl -X POST http://localhost:8000/api/v1/admin/upload \
-  -H "Authorization: Bearer your-jwt-token" \
+  -H "Authorization: Bearer <JWT>" \
   -F "file=@./my-article.md" \
-  -F "parent_id=1"
+  -F "folder_id=1"
 ```
 
-**Response:**
+**成功响应（入队成功）:**
 ```json
 {
   "success": true,
-  "message": "File uploaded successfully: docs/my-article",
-  "node": {
+  "message": "File uploaded successfully: docs/my-article. RAG indexing task queued.",
+  "file": {
     "id": 10,
+    "folder_id": 1,
     "title": "My Article",
     "slug": "my-article",
     "full_path": "docs/my-article",
-    "node_type": "FILE"
+    "sort_order": 0
   }
+}
+```
+
+**成功响应（入队失败）:**
+文件已成功写入存储，但 Redis 不可用导致 Celery 任务投递失败。
+此时 `rag_documents` 记录会被标记为 `failed`（error_message 注明「Celery 任务投递失败（Redis 不可用）」），
+`message` 会明确提示「知识库入队失败」，便于管理端在 Redis 恢复后通过 `/knowledge/sync` 手动重试。
+
+```json
+{
+  "success": true,
+  "message": "文件上传成功，但知识库入队失败: docs/my-article",
+  "file": { "...": "..." }
 }
 ```
 
 ---
 
-### Delete File/Folder
-
-Delete a node and optionally its physical file.
+### Create Folder
 
 ```http
-DELETE /api/v1/admin/delete/{node_id}
+POST /api/v1/admin/folder
+```
+
+**Body:**
+```json
+{ "title": "New Folder", "parent_id": 1 }
+```
+
+---
+
+### Delete File / Folder
+
+删除节点并清理 RAG 索引（物理文件可选）。
+
+```http
+DELETE /api/v1/admin/delete/{item_type}/{item_id}
 ```
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
-| node_id | int | ID of the node to delete |
-| delete_physical | bool | Delete physical file (default: true) |
+| item_type | string | `file` 或 `folder` |
+| item_id | int | 节点 ID |
+| delete_physical | bool | 是否删除物理文件（默认 true） |
 
 **Example:**
 ```bash
-curl -X DELETE "http://localhost:8000/api/v1/admin/delete/5?delete_physical=true" \
-  -H "Authorization: Bearer your-jwt-token"
+curl -X DELETE "http://localhost:8000/api/v1/admin/delete/file/5?delete_physical=true" \
+  -H "Authorization: Bearer <JWT>"
 ```
 
 **Response:**
 ```json
 {
   "success": true,
-  "message": "Deleted successfully: docs/my-article",
+  "message": "Deleted successfully: docs/my-article. RAG index cleaned.",
   "deleted_path": "docs/my-article",
   "physical_deleted": true
 }
+```
+
+---
+
+### RAG 知识库状态
+
+返回自研 RAG 索引的实时状态统计。
+
+```http
+GET /api/v1/admin/knowledge/status
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "pending": 2,
+  "processing": 1,
+  "completed": 42,
+  "failed": 1,
+  "latest_error": "【将自动重试】Embedding API 暂时不可用: HTTP 429"
+}
+```
+
+---
+
+### RAG 知识库手动重试
+
+把 `failed` / `pending` 的文档重置为 `pending`（retry_count 清零），并批量重新投递 Celery 任务。
+
+```http
+POST /api/v1/admin/knowledge/sync
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Reset 3 documents to pending.",
+  "scheduled": 3,
+  "enqueued": 3,
+  "failed_enqueue": 0
+}
+```
+
+---
+
+### 同步历史
+
+返回最近的知识库入库任务历史（含状态、重试次数、错误信息、时间戳）。
+
+```http
+GET /api/v1/admin/sync-history?limit=50
+```
+
+**Response 字段:** `id`, `doc_id`, `file_id`, `title`, `full_path`, `storage_key`,
+`status`, `retry_count`, `chunk_count`, `error_message`, `content_hash`,
+`queued_at`, `processing_started_at`, `completed_at`, `failed_at`, `created_at`, `updated_at`。
+
+---
+
+### Dashboard 统计
+
+```http
+GET /api/v1/admin/stats
+```
+
+---
+
+### 用户管理 / 会话审计
+
+```http
+GET    /api/v1/admin/users
+POST   /api/v1/admin/users
+PUT    /api/v1/admin/users/{user_id}
+DELETE /api/v1/admin/users/{user_id}
+GET    /api/v1/admin/chat-sessions
+GET    /api/v1/admin/chat-sessions/{session_id}/messages
 ```
 
 ---
@@ -187,21 +296,26 @@ curl -X DELETE "http://localhost:8000/api/v1/admin/delete/5?delete_physical=true
 
 ### 401 Unauthorized
 ```json
-{
-  "detail": "Not authenticated"
-}
+{ "detail": "Not authenticated" }
 ```
 
 ### 404 Not Found
 ```json
-{
-  "detail": "Node not found: invalid/path"
-}
+{ "detail": "Node not found: invalid/path" }
 ```
 
 ### 400 Bad Request
 ```json
-{
-  "detail": "Only .md files are allowed"
-}
+{ "detail": "File type not allowed. Allowed types: .md, .html, .docx, .txt, .pdf" }
+```
+
+---
+
+## 排查命令
+
+```bash
+./start_wiki.sh status          # 查看所有服务状态（应含 redis、rag-worker）
+./start_wiki.sh logs            # 查看 wiki-web / wiki-backend 日志
+docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
+docker compose logs redis       # 查看 Redis 日志
 ```
