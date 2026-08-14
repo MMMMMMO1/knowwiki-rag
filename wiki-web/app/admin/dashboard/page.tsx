@@ -349,12 +349,12 @@ export default function AdminDashboard() {
             });
             if (res.ok) {
                 const data = await res.json();
-                message.success(data.message || '已触发知识库同步任务');
+                message.success(data.message || '已补投待处理/失败任务');
                 fetchSyncHistory();
                 fetchStats();
             } else {
                 const data = await res.json();
-                message.error(data.message || '触发同步失败');
+                message.error(data.message || '补投失败');
             }
         } catch {
             message.error('连接失败');
@@ -611,7 +611,7 @@ export default function AdminDashboard() {
                     </Title>
                     <Space>
                         <Button type="primary" onClick={triggerManualSync} loading={syncRetrying} icon={<SyncOutlined spin={syncRetrying} />} style={{ background: '#cc785c', border: 'none', borderRadius: 8 }}>
-                            重试失败任务
+                            补投待处理/失败任务
                         </Button>
                         <Button onClick={triggerRebuild} loading={rebuilding} icon={<SyncOutlined spin={rebuilding} />} style={{ borderRadius: 8 }}>
                             全量补齐

@@ -291,8 +291,9 @@ POST /api/v1/admin/knowledge/rebuild
 
 ### RAG 配置可用性检查
 
-轻量状态接口，判断 `LLM_API_KEY`、`EMBEDDING_API_KEY`、Redis/Celery 队列配置是否具备。
-只返回 boolean 与缺失项名称，不输出任何密钥真实值。
+轻量配置**完整性检查**（不是运行时健康检查），只判断 `LLM_API_KEY`、`EMBEDDING_API_KEY`、
+Redis/Celery 队列配置项是否已填写。不会真正连接 Redis 或调用 LLM，也不会输出任何密钥真实值，
+只返回 boolean 与缺失项名称。
 
 ```http
 GET /api/v1/rag/config-status

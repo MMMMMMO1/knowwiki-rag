@@ -192,7 +192,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
             if (!res.ok || !data.success) {
                 throw new Error(data.message || '触发知识库同步失败');
             }
-            message.success('已触发知识库同步');
+            message.success('已补投待处理/失败任务');
             await fetchSyncStatus();
         } catch (error) {
             message.error(error instanceof Error ? error.message : '触发知识库同步失败');
@@ -427,7 +427,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
                             onClick={fetchSyncStatus}
                         />
                     </Tooltip>
-                    <Tooltip title="重试失败任务">
+                    <Tooltip title="补投待处理/失败任务">
                         <Button
                             type="text"
                             size="small"

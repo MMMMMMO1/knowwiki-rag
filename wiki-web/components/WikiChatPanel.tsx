@@ -36,6 +36,9 @@ export default function WikiChatPanel() {
     const [configStatus, setConfigStatus] = useState<RagConfigStatus | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
 
+    // 说明：知识库配置未完整时禁用发送，但保留历史加载与重置会话能力。
+    const ragNotReady = configStatus !== null && !configStatus.ready;
+
     useEffect(() => {
         // 说明：进入面板时检查知识库配置，未配置完整则提前提示，避免发送后才报底层错误。
         let ignore = false;
@@ -102,7 +105,7 @@ export default function WikiChatPanel() {
     const handleSubmit = async (event?: FormEvent, suggestedMessage?: string) => {
         event?.preventDefault();
 
-        if (!sessionId || sending) {
+        if (!sessionId || sending || ragNotReady) {
             return;
         }
 
@@ -300,7 +303,7 @@ export default function WikiChatPanel() {
                                     key={message}
                                     type="button"
                                     onClick={() => handleSubmit(undefined, message)}
-                                    disabled={sending}
+                                    disabled={sending || ragNotReady}
                                 >
                                     {message}
                                 </button>
@@ -317,8 +320,8 @@ export default function WikiChatPanel() {
             <form className="wiki-chat-panel__composer" onSubmit={handleSubmit}>
                 <TextArea
                     value={inputValue}
-                    disabled={sending}
-                    placeholder={config.placeholder}
+                    disabled={sending || ragNotReady}
+                    placeholder={ragNotReady ? '知识库服务未配置完整，暂不可发送' : config.placeholder}
                     autoSize={{ minRows: 2, maxRows: 5 }}
                     onChange={(event) => setInputValue(event.target.value)}
                     onPressEnter={(event) => {
@@ -328,15 +331,17 @@ export default function WikiChatPanel() {
                         }
                     }}
                 />
-                <Button
-                    type="primary"
-                    htmlType="submit"
-                    icon={<SendOutlined />}
-                    loading={sending}
-                    disabled={!inputValue.trim()}
-                >
-                    发送
-                </Button>
+                <Tooltip title={ragNotReady ? '知识库服务未配置完整，暂不可发送' : ''}>
+                    <Button
+                        type="primary"
+                        htmlType="submit"
+                        icon={<SendOutlined />}
+                        loading={sending}
+                        disabled={ragNotReady || !inputValue.trim()}
+                    >
+                        发送
+                    </Button>
+                </Tooltip>
             </form>
         </aside>
     );
