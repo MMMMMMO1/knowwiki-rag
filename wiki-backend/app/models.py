@@ -101,7 +101,17 @@ class ChatLog(Base):
 
 
 class RagDocument(Base):
-    """RAG 文档处理记录 —— 跟踪哪些 Wiki 文件已被 RAG 流水线处理。"""
+    """RAG 文档处理记录 —— 任务状态台账。
+
+    状态机: pending → processing → completed | failed
+    - pending: 已入队，等待 worker 消费
+    - processing: worker 正在处理
+    - completed: 索引完成
+    - failed: 失败，可手动重试
+
+    该表只负责业务可观测性（状态、错误、分块数、哈希、时间戳），
+    任务调度由 Redis + Celery 负责，两者解耦。
+    """
 
     __tablename__ = "rag_documents"
 
@@ -112,7 +122,13 @@ class RagDocument(Base):
     content_hash = Column(String(64), nullable=True)
     status = Column(String(20), nullable=False, default="pending", index=True)
     chunk_count = Column(Integer, nullable=False, default=0)
+    retry_count = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
+    # 队列时间戳
+    queued_at = Column(DateTime(timezone=True), nullable=True)
+    processing_started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

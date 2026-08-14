@@ -26,7 +26,6 @@ celery_app.conf.update(
     result_serializer="json",
     accept_content=["json"],
     timezone="Asia/Shanghai",
-    enable_utc=True,
     # 防止任务无限挂起：单个任务最长 15 分钟
     task_time_limit=900,
     task_soft_time_limit=840,

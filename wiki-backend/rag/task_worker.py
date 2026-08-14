@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
@@ -22,6 +23,14 @@ from rag.embedding import Embedder
 from rag.loader import DocumentLoader
 from rag.splitter import TextSplitter
 from rag.vector_store import VectorStore
+
+
+# 与 Celery 的 task_time_limit(900s) 对齐：超过该时长的 processing 视为僵尸任务
+STALE_PROCESSING_TIMEOUT_SECONDS = 900
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class RetryableIndexingError(Exception):
@@ -56,9 +65,9 @@ class RagIndexingProcessor:
     async def process(self, rag_document_id: int) -> None:
         """执行完整 RAG 流水线，更新 RagDocument 状态。
 
-        成功: status=completed，chunk_count 已写入。
-        失败: status=failed，error_message 已写入（脱敏），并重新抛出异常
-              （RetryableIndexingError 会触发 Celery 重试）。
+        成功: status=completed，chunk_count 已写入，completed_at 已记录。
+        失败: status=failed，error_message 已写入（脱敏）、retry_count +1、failed_at 已记录，
+              并重新抛出异常（RetryableIndexingError 会触发 Celery 重试）。
         """
         async with AsyncSessionLocal() as db:
             doc = await self._load_document(db, rag_document_id)
@@ -67,12 +76,16 @@ class RagIndexingProcessor:
 
             # 状态置 processing
             doc.status = "processing"
+            doc.processing_started_at = _utcnow()
+            doc.error_message = None
             await db.commit()
 
             try:
                 await self._run_pipeline(db, doc)
                 doc.status = "completed"
                 doc.error_message = None
+                doc.completed_at = _utcnow()
+                doc.failed_at = None
                 await db.commit()
             except Exception as exc:
                 # 失败：回滚当前事务，写 failed + 脱敏错误
@@ -91,12 +104,17 @@ class RagIndexingProcessor:
         return result.scalar_one_or_none()
 
     async def _mark_failed(self, rag_document_id: int, message: str) -> None:
-        """把 RagDocument 标记为 failed 并写入脱敏错误信息。"""
+        """把 RagDocument 标记为 failed：写入脱敏错误、retry_count +1、failed_at。"""
         async with AsyncSessionLocal() as db:
             await db.execute(
                 update(RagDocument)
                 .where(RagDocument.id == rag_document_id)
-                .values(status="failed", error_message=message)
+                .values(
+                    status="failed",
+                    error_message=message,
+                    failed_at=_utcnow(),
+                    retry_count=RagDocument.retry_count + 1,
+                )
             )
             await db.commit()
 
@@ -152,16 +170,28 @@ class RagIndexingProcessor:
 
 
 async def reset_stale_processing_documents() -> int:
-    """把遗留的 processing 状态文档重置为 pending。
+    """把超时的 processing 状态文档重置为 pending。
 
-    用于 worker 重启 / 部署后恢复：之前崩溃时卡在 processing 的任务
-    不会被重新拾取，这里把它们重置回 pending，等待重新投递。
+    只重置 processing_started_at 早于阈值（或为 NULL）的任务，
+    避免误伤正在被 rag-worker 处理中的任务。
+    用于 worker 重启 / 部署后恢复：崩溃遗留的任务会被重置回 pending。
     """
+    cutoff = _utcnow() - timedelta(seconds=STALE_PROCESSING_TIMEOUT_SECONDS)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             update(RagDocument)
             .where(RagDocument.status == "processing")
-            .values(status="pending", error_message=None)
+            .where(
+                or_(
+                    RagDocument.processing_started_at.is_(None),
+                    RagDocument.processing_started_at < cutoff,
+                )
+            )
+            .values(
+                status="pending",
+                error_message=None,
+                processing_started_at=None,
+            )
         )
         await db.commit()
         return result.rowcount or 0
@@ -173,6 +203,11 @@ async def mark_rag_document_failed(rag_document_id: int, message: str) -> None:
         await db.execute(
             update(RagDocument)
             .where(RagDocument.id == rag_document_id)
-            .values(status="failed", error_message=sanitize_error_message(message))
+            .values(
+                status="failed",
+                error_message=sanitize_error_message(message),
+                failed_at=_utcnow(),
+                retry_count=RagDocument.retry_count + 1,
+            )
         )
         await db.commit()

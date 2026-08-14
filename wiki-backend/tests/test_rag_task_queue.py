@@ -1,34 +1,63 @@
-"""RAG 消息队列投递测试 —— 验证 Celery 任务投递逻辑。"""
+"""RAG 消息队列投递测试 —— 用 mock 测试 Celery 投递，不依赖真实 Redis/celery。
 
-from unittest.mock import patch
+若 celery 未安装，注入一个最小可用的假 celery 模块，让 rag.tasks 可导入，
+再通过 mock 掉 .delay() 验证投递逻辑，全程不触碰真实 Redis。
+"""
 
-import pytest
+import sys
+import types
+from unittest.mock import MagicMock, patch
 
-# celery/redis 未安装时跳过（Docker 内 uv sync 后可用）
-celery = pytest.importorskip("celery", reason="celery 未安装")
+# 若 celery 未安装，注入最小可用的假 celery 模块。
+try:
+    import celery  # noqa: F401
+except ImportError:
+    class _FakeConf:
+        def update(self, **kwargs):
+            pass
+
+    class _FakeCelery:
+        def __init__(self, *args, **kwargs):
+            self.conf = _FakeConf()
+
+        def task(self, bind=False, name=None, max_retries=None):
+            def decorator(func):
+                func.name = name or func.__name__
+                func.max_retries = max_retries or 0
+                func.delay = MagicMock()
+                func.apply_async = MagicMock()
+                return func
+            return decorator
+
+        def autodiscover_tasks(self, *args, **kwargs):
+            pass
+
+    celery_stub = types.ModuleType("celery")
+    celery_stub.Celery = _FakeCelery
+    sys.modules["celery"] = celery_stub
 
 
 def test_enqueue_rag_document_task_calls_delay() -> None:
-    from rag.tasks import enqueue_rag_document_task
+    from rag.tasks import enqueue_rag_document_task, process_rag_document
 
-    with patch("rag.tasks.process_rag_document.delay") as mock_delay:
-        result = enqueue_rag_document_task(123)
+    process_rag_document.delay = MagicMock()
+    result = enqueue_rag_document_task(123)
 
     assert result is True
-    mock_delay.assert_called_once_with(123)
+    process_rag_document.delay.assert_called_once_with(123)
 
 
 def test_enqueue_rag_document_task_returns_false_on_failure() -> None:
-    from rag.tasks import enqueue_rag_document_task
+    from rag.tasks import enqueue_rag_document_task, process_rag_document
 
-    with patch("rag.tasks.process_rag_document.delay", side_effect=Exception("redis down")):
-        result = enqueue_rag_document_task(123)
+    process_rag_document.delay = MagicMock(side_effect=Exception("redis down"))
+    result = enqueue_rag_document_task(123)
 
     assert result is False
 
 
 def test_process_rag_document_task_registered() -> None:
-    """验证任务名已注册到 Celery app。"""
+    """验证任务名与重试次数已正确注册。"""
     from rag.tasks import process_rag_document
 
     assert process_rag_document.name == "rag.tasks.process_rag_document"

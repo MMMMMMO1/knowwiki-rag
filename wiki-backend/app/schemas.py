@@ -160,9 +160,18 @@ class SyncHistoryItem(BaseModel):
     id: int
     doc_id: str
     file_id: Optional[int] = None
+    title: str
+    full_path: Optional[str] = None
+    storage_key: Optional[str] = None
     status: str
+    retry_count: int
+    chunk_count: int
     error_message: Optional[str] = None
     content_hash: Optional[str] = None
+    queued_at: Optional[datetime] = None
+    processing_started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

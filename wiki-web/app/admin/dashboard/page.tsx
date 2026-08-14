@@ -45,9 +45,18 @@ interface SyncRecord {
     id: number;
     doc_id: string;
     file_id: number | null;
+    title: string;
+    full_path: string | null;
+    storage_key: string | null;
     status: string;
+    retry_count: number;
+    chunk_count: number;
     error_message: string | null;
     content_hash: string | null;
+    queued_at: string | null;
+    processing_started_at: string | null;
+    completed_at: string | null;
+    failed_at: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -505,18 +514,17 @@ export default function AdminDashboard() {
     const renderSync = () => {
         const columns = [
             {
-                title: '文档 ID',
-                dataIndex: 'doc_id',
-                key: 'doc_id',
-                render: (text: string) => (
-                    <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>{text}</Text>
+                title: '文件标题',
+                dataIndex: 'title',
+                key: 'title',
+                render: (text: string, r: SyncRecord) => (
+                    <Space direction="vertical" size={2}>
+                        <Text strong style={{ fontSize: 13 }}>{text}</Text>
+                        <Text type="secondary" style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                            {r.full_path || r.storage_key || '—'}
+                        </Text>
+                    </Space>
                 )
-            },
-            {
-                title: '关联文件',
-                dataIndex: 'file_id',
-                key: 'file_id',
-                render: (fid: number | null) => fid ? <Tag>{fid}</Tag> : <Text type="secondary">—</Text>
             },
             {
                 title: '同步状态',
@@ -527,10 +535,22 @@ export default function AdminDashboard() {
                     let text = status;
                     if (status === 'completed') { color = 'green'; text = '已完成'; }
                     else if (status === 'failed') { color = 'red'; text = '失败'; }
-                    else if (status === 'pending') { color = 'blue'; text = '队列中'; }
+                    else if (status === 'pending') { color = 'blue'; text = '排队中'; }
                     else if (status === 'processing') { color = 'orange'; text = '处理中'; }
                     return <Tag color={color}>{text}</Tag>;
                 }
+            },
+            {
+                title: '重试次数',
+                dataIndex: 'retry_count',
+                key: 'retry_count',
+                render: (count: number) => count > 0 ? <Tag color="gold">{count}</Tag> : <Text type="secondary">0</Text>
+            },
+            {
+                title: '分块数',
+                dataIndex: 'chunk_count',
+                key: 'chunk_count',
+                render: (count: number) => count > 0 ? count : '—'
             },
             {
                 title: '错误详情',
@@ -542,6 +562,12 @@ export default function AdminDashboard() {
                         <Text type="danger" ellipsis style={{ maxWidth: 240, fontSize: 11 }}>{err}</Text>
                     </Tooltip>
                 ) : <Text type="secondary">—</Text>
+            },
+            {
+                title: '入队时间',
+                dataIndex: 'queued_at',
+                key: 'queued_at',
+                render: (t: string | null) => t ? new Date(t).toLocaleString('zh-CN') : '—'
             },
             {
                 title: '更新时间',

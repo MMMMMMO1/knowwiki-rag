@@ -28,6 +28,25 @@
 - **PostgreSQL rag_documents**：状态与审计层（pending/processing/completed/failed）。
 - **PostgreSQL pgvector rag_chunks**：向量检索层。
 
+### 状态流转
+
+```
+pending → processing → completed
+   │            └── 失败 → failed（可手动重试）
+   └── /knowledge/sync 手动重试：failed/pending → pending
+```
+
+`rag_documents` 记录 retry_count、chunk_count、content_hash、error_message，
+以及 queued_at / processing_started_at / completed_at / failed_at 等时间戳。
+
+### 常用排查命令
+
+```bash
+./start_wiki.sh status          # 查看所有服务状态（应含 redis、rag-worker）
+./start_wiki.sh logs            # 查看 wiki-web / wiki-backend 日志
+docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
+```
+
 ## 快速启动
 
 默认模式只开放 Wiki Web 端口，后端、数据库、Redis、RustFS 均只允许 Docker 内部网络访问。

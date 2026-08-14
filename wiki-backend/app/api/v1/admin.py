@@ -345,7 +345,8 @@ async def rag_knowledge_sync(
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """把 failed 或 pending 的 RAG 文档重置为 pending，并批量重新投递 Celery 任务。"""
+    """把 failed / pending 的 RAG 文档重置为 pending，并批量重新投递 Celery 任务。"""
+    from datetime import datetime, timezone
     from app.models import RagDocument
 
     result = await db.execute(
@@ -355,10 +356,16 @@ async def rag_knowledge_sync(
     )
     docs = result.scalars().all()
 
+    now = datetime.now(timezone.utc)
     doc_ids: list[int] = []
     for doc in docs:
         doc.status = "pending"
         doc.error_message = None
+        doc.queued_at = now
+        doc.processing_started_at = None
+        doc.completed_at = None
+        doc.failed_at = None
+        doc.retry_count = 0  # 手动重试时清零
         doc_ids.append(doc.id)
 
     await db.commit()
@@ -381,6 +388,7 @@ async def rag_knowledge_sync(
     return {
         "success": True,
         "message": f"Reset {len(docs)} documents to pending.",
+        "scheduled": len(docs),
         "enqueued": enqueued,
         "failed_enqueue": len(failed_ids),
     }
@@ -585,11 +593,41 @@ async def get_sync_history(
 ) -> list[SyncHistoryItem]:
     """
     获取最近的知识库文档同步任务历史记录。
+
+    RagDocument.file_id 可能为空（文件已被删除时 SET NULL），
+    此时仍返回该任务自身的 title，full_path/storage_key 为 None。
     """
+    from app.models import RagDocument, File
+
     result = await db.execute(
-        select(RagDocument)
+        select(RagDocument, File)
+        .join(File, File.id == RagDocument.file_id, isouter=True)
         .order_by(RagDocument.updated_at.desc())
         .limit(limit)
     )
-    records = result.scalars().all()
-    return [SyncHistoryItem.model_validate(r) for r in records]
+    rows = result.all()
+
+    items: list[SyncHistoryItem] = []
+    for doc, file in rows:
+        items.append(
+            SyncHistoryItem(
+                id=doc.id,
+                doc_id=doc.doc_id,
+                file_id=doc.file_id,
+                title=doc.title,
+                full_path=file.full_path if file else None,
+                storage_key=file.storage_key if file else None,
+                status=doc.status,
+                retry_count=doc.retry_count,
+                chunk_count=doc.chunk_count,
+                error_message=doc.error_message,
+                content_hash=doc.content_hash,
+                queued_at=doc.queued_at,
+                processing_started_at=doc.processing_started_at,
+                completed_at=doc.completed_at,
+                failed_at=doc.failed_at,
+                created_at=doc.created_at,
+                updated_at=doc.updated_at,
+            )
+        )
+    return items

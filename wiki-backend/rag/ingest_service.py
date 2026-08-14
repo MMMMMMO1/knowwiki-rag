@@ -1,10 +1,11 @@
 """
 入库服务 —— 接收文档入库请求，创建处理记录并返回。
 
-不执行实际流水线，只写 rag_documents 记录（status=pending）。
-实际处理由 task_worker 在后台完成。
+不执行实际流水线，只写 rag_documents 记录（status=pending，queued_at 已记录）。
+实际处理由 Celery rag-worker 在后台完成。
 """
 
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +57,10 @@ class IngestService:
             doc.status = "pending"
             doc.error_message = None
             doc.title = file.title
+            doc.queued_at = datetime.now(timezone.utc)
+            doc.processing_started_at = None
+            doc.completed_at = None
+            doc.failed_at = None
             await self.db.flush()
             return doc
 
@@ -65,6 +70,7 @@ class IngestService:
             doc_id=str(uuid4()),
             title=file.title,
             status="pending",
+            queued_at=datetime.now(timezone.utc),
         )
         self.db.add(doc)
         await self.db.flush()

@@ -103,12 +103,10 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
     const [result, setResult] = useState<OperationResult | null>(null);
     const [syncStatus, setSyncStatus] = useState<{
         success: boolean;
-        pending_upload: number;
-        pending_delete: number;
+        pending: number;
         processing: number;
+        completed: number;
         failed: number;
-        synced: number;
-        deleted: number;
         latest_error?: string | null;
     } | null>(null);
     const [syncStatusLoading, setSyncStatusLoading] = useState(false);
@@ -208,8 +206,7 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
 
     useEffect(() => {
         const hasPendingSync = Boolean(syncStatus && (
-            syncStatus.pending_upload > 0
-            || syncStatus.pending_delete > 0
+            syncStatus.pending > 0
             || syncStatus.processing > 0
         ));
         if (!hasPendingSync) return;
@@ -380,18 +377,19 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
     };
 
     const antTreeData = buildAntTree(treeData);
-    const pendingCount = syncStatus ? syncStatus.pending_upload + syncStatus.pending_delete : 0;
+    const pendingCount = syncStatus?.pending ?? 0;
     const processingCount = syncStatus?.processing ?? 0;
-    const syncHealthColor = syncStatus?.failed
+    const failedCount = syncStatus?.failed ?? 0;
+    const syncHealthColor = failedCount > 0
         ? 'error'
         : pendingCount > 0 || processingCount > 0
             ? 'processing'
             : 'success';
-    const syncHealthText = syncStatus?.failed
-        ? '同步异常'
+    const syncHealthText = failedCount > 0
+        ? '队列异常'
         : pendingCount > 0 || processingCount > 0
-            ? '缓存处理中'
-            : '已同步';
+            ? '队列处理中'
+            : '已完成';
 
     return (
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
@@ -413,11 +411,10 @@ export function AdminFileManager({ token, onTreeChange }: AdminFileManagerProps)
                         知识库同步
                     </Text>
                     <Tag color={syncHealthColor}>{syncHealthText}</Tag>
-                    <Tag color="blue">待上传 {syncStatus?.pending_upload ?? 0}</Tag>
-                    <Tag color="cyan">处理中 {syncStatus?.processing ?? 0}</Tag>
-                    <Tag color="gold">待删除 {syncStatus?.pending_delete ?? 0}</Tag>
-                    <Tag color={syncStatus?.failed ? 'red' : 'default'}>失败 {syncStatus?.failed ?? 0}</Tag>
-                    <Tag color="green">已同步 {syncStatus?.synced ?? 0}</Tag>
+                    <Tag color="blue">排队中 {pendingCount}</Tag>
+                    <Tag color="cyan">处理中 {processingCount}</Tag>
+                    <Tag color={failedCount > 0 ? 'red' : 'default'}>失败 {failedCount}</Tag>
+                    <Tag color="green">已完成 {syncStatus?.completed ?? 0}</Tag>
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
                     <Tooltip title="刷新同步状态">

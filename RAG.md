@@ -53,6 +53,41 @@
    可重试错误（网络、embedding 限流）由任务自己声明。
 5. 多 worker 并发消费 —— `--concurrency=N` + Redis 队列天然支持水平扩展。
 
+## 状态流转
+
+```
+pending ──worker 消费──> processing ──成功──> completed
+   │                        │
+   │                        └─失败（可重试）──> Celery 延迟重试（retry_count +1）
+   │                        └─失败（不可重试）──> failed（可手动重试）
+   └── /knowledge/sync 手动重试：failed/pending 重置为 pending，retry_count 清零
+```
+
+`rag_documents` 状态字段：
+
+| 字段 | 含义 |
+|------|------|
+| status | pending / processing / completed / failed |
+| retry_count | 累计重试次数（手动重试时清零） |
+| chunk_count | 索引生成的分块数 |
+| error_message | 脱敏后的错误信息（不含 API Key） |
+| content_hash | 文档内容 SHA256 |
+| queued_at | 入队时间 |
+| processing_started_at | worker 开始处理时间 |
+| completed_at | 完成时间 |
+| failed_at | 失败时间 |
+
+## 启动与排查
+
+启动后应包含 redis 和 rag-worker 两个新服务：
+
+```bash
+./start_wiki.sh status          # 查看所有服务状态（应含 redis、rag-worker）
+./start_wiki.sh logs            # 查看 wiki-web / wiki-backend 日志
+docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
+docker compose logs redis       # 查看 Redis 日志
+```
+
 ---
 
 # 第一步：定义 RAG 数据结构（schemas.py）

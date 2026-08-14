@@ -94,12 +94,23 @@ def test_sync_history_item_validation() -> None:
         id=1,
         doc_id="550e8400-e29b-41d4-a716-446655440000",
         file_id=10,
+        title="test.md",
+        full_path="test.md",
+        storage_key="test.md",
         status="completed",
+        retry_count=0,
+        chunk_count=5,
         error_message=None,
         content_hash=None,
+        queued_at=now,
+        processing_started_at=None,
+        completed_at=now,
+        failed_at=None,
         created_at=now,
         updated_at=now,
     )
     assert item.id == 1
     assert item.status == "completed"
     assert item.doc_id == "550e8400-e29b-41d4-a716-446655440000"
+    assert item.title == "test.md"
+    assert item.chunk_count == 5
