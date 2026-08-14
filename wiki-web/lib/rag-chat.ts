@@ -36,6 +36,15 @@ export type ChatMessage = {
     pending?: boolean;
 };
 
+export type RagConfigStatus = {
+    success: boolean;
+    ready: boolean;
+    missing: string[];
+    llm_configured?: boolean;
+    embedding_configured?: boolean;
+    queue_configured?: boolean;
+};
+
 type ChatHistoryItem = {
     role: 'user' | 'assistant' | string;
     content: string;
@@ -65,10 +74,19 @@ export function createChatConfig(): ChatConfig {
             process.env.NEXT_PUBLIC_CHATBOT_DEFAULT_MESSAGES?.trim()
             || '介绍一下这个知识库,我可以如何使用这个 Wiki'
         ),
-        prompt: process.env.NEXT_PUBLIC_CHATBOT_PROMPT?.trim(),
+        prompt: buildChatPrompt(process.env.NEXT_PUBLIC_CHATBOT_PROMPT?.trim()),
         model: process.env.NEXT_PUBLIC_CHATBOT_MODEL?.trim(),
         temperature: process.env.NEXT_PUBLIC_CHATBOT_TEMPERATURE?.trim(),
     };
+}
+
+function buildChatPrompt(prompt?: string) {
+    if (!prompt) {
+        return LEARNING_RECOMMENDATION_PROMPT;
+    }
+
+    // 说明：保留用户自定义的 prompt，只在末尾追加学习推荐输出协议。
+    return `${prompt}\n\n${LEARNING_RECOMMENDATION_PROMPT}`;
 }
 
 export function getOrCreateSessionId() {
@@ -122,6 +140,18 @@ export async function resetChatSession(
     });
 
     return response.ok;
+}
+
+export async function fetchRagConfigStatus(): Promise<RagConfigStatus> {
+    const response = await fetch('/api/rag/config-status', {
+        cache: 'no-store',
+    });
+
+    if (!response.ok) {
+        throw new Error('知识库配置状态加载失败');
+    }
+
+    return response.json() as Promise<RagConfigStatus>;
 }
 
 function parseDefaultMessages(value: string) {

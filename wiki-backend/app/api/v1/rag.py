@@ -64,3 +64,34 @@ async def rag_ingest(
         title=doc.title,
         status=doc.status,
     )
+
+
+@router.get("/rag/config-status")
+async def rag_config_status():
+    """轻量 RAG 配置可用性检查 —— 只返回 boolean 与缺失项名称，不输出任何密钥值。
+
+    供前端聊天面板在用户发送消息前提示「知识库未配置完整」，
+    避免用户发出消息后才看到底层错误。
+    """
+    from app.core.config import settings
+
+    llm_ok = bool((settings.LLM_API_KEY or "").strip())
+    embedding_ok = bool((settings.EMBEDDING_API_KEY or "").strip())
+    queue_ok = bool((settings.CELERY_BROKER_URL or "").strip())
+
+    missing: list[str] = []
+    if not llm_ok:
+        missing.append("LLM_API_KEY")
+    if not embedding_ok:
+        missing.append("EMBEDDING_API_KEY")
+    if not queue_ok:
+        missing.append("CELERY_BROKER_URL")
+
+    return {
+        "success": True,
+        "ready": not missing,
+        "missing": missing,
+        "llm_configured": llm_ok,
+        "embedding_configured": embedding_ok,
+        "queue_configured": queue_ok,
+    }

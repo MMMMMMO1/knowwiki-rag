@@ -36,7 +36,7 @@ async def chat_stream(
     - abort: 错误
     """
     # 1. 查询同会话最近历史（先于写入当前消息，避免把当前问题算进历史）。
-    #    与 main 的 AnythingLLM thread 行为对齐：同 session 保留最近若干条上下文。
+    #    保留历史会话上下文：同 session 取最近若干条消息传给 LLM，支持多轮追问。
     HISTORY_LIMIT = 10
     history_result = await db.execute(
         select(models.ChatLog)

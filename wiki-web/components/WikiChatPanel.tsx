@@ -6,9 +6,11 @@ import { BulbOutlined, DeleteOutlined, ReloadOutlined, SendOutlined } from '@ant
 import ReactMarkdown from 'react-markdown';
 import {
     ChatMessage,
+    RagConfigStatus,
     StreamEvent,
     createChatConfig,
     fetchChatHistory,
+    fetchRagConfigStatus,
     getOrCreateSessionId,
     resetChatSession,
     streamRagChat,
@@ -31,7 +33,25 @@ export default function WikiChatPanel() {
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [sending, setSending] = useState(false);
     const [error, setError] = useState('');
+    const [configStatus, setConfigStatus] = useState<RagConfigStatus | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        // 说明：进入面板时检查知识库配置，未配置完整则提前提示，避免发送后才报底层错误。
+        let ignore = false;
+        fetchRagConfigStatus()
+            .then((status) => {
+                if (!ignore) {
+                    setConfigStatus(status);
+                }
+            })
+            .catch(() => {
+                // 说明：配置状态检查失败不阻塞聊天，底层错误会在发送时兜底提示。
+            });
+        return () => {
+            ignore = true;
+        };
+    }, []);
 
     useEffect(() => {
         setSessionId(getOrCreateSessionId());
@@ -252,6 +272,16 @@ export default function WikiChatPanel() {
                     showIcon
                     closable
                     onClose={() => setError('')}
+                    style={{ margin: '0 16px 12px' }}
+                />
+            )}
+
+            {configStatus && !configStatus.ready && (
+                <Alert
+                    type="warning"
+                    showIcon
+                    message="知识库服务未配置完整"
+                    description={`缺少配置：${configStatus.missing.join('、')}，请联系管理员完成配置后再使用问答。`}
                     style={{ margin: '0 16px 12px' }}
                 />
             )}

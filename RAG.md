@@ -64,7 +64,8 @@ pending ──worker 消费──> processing ──成功──> completed
    │                        │      └─达到 max_retries──> failed（文案：已达到最大重试次数）
    │                        ├─失败（不可重试）──> failed（可手动重试）
    │                        └─文件已被删除──> skipped（不算失败、不重试）
-   └── /knowledge/sync 手动重试：仅 failed 重置为 pending，retry_count 清零
+   └── /knowledge/sync 手动重试：failed + pending 重置为 pending，retry_count 清零
+   └── /knowledge/rebuild 全量补齐：扫描 files 表，补建/重投缺失的入库任务
 ```
 
 `rag_documents` 状态字段：

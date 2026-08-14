@@ -107,6 +107,7 @@ export default function AdminDashboard() {
     const [syncHistory, setSyncHistory] = useState<SyncRecord[]>([]);
     const [syncHistoryLoading, setSyncHistoryLoading] = useState(false);
     const [syncRetrying, setSyncRetrying] = useState(false);
+    const [rebuilding, setRebuilding] = useState(false);
 
     // Auth check
     useEffect(() => {
@@ -362,6 +363,30 @@ export default function AdminDashboard() {
         }
     };
 
+    const triggerRebuild = async () => {
+        if (!token) return;
+        setRebuilding(true);
+        try {
+            const res = await fetch('/api/admin/knowledge/rebuild', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                message.success(data.message || '已触发全量补齐');
+                fetchSyncHistory();
+                fetchStats();
+            } else {
+                const data = await res.json();
+                message.error(data.message || '全量补齐失败');
+            }
+        } catch {
+            message.error('连接失败');
+        } finally {
+            setRebuilding(false);
+        }
+    };
+
     /* ─── Chat Audit Actions ─── */
 
     const handleInspectSession = (session: ChatSession) => {
@@ -587,6 +612,9 @@ export default function AdminDashboard() {
                     <Space>
                         <Button type="primary" onClick={triggerManualSync} loading={syncRetrying} icon={<SyncOutlined spin={syncRetrying} />} style={{ background: '#cc785c', border: 'none', borderRadius: 8 }}>
                             重试失败任务
+                        </Button>
+                        <Button onClick={triggerRebuild} loading={rebuilding} icon={<SyncOutlined spin={rebuilding} />} style={{ borderRadius: 8 }}>
+                            全量补齐
                         </Button>
                         <Button onClick={fetchSyncHistory} icon={<ReloadOutlined />} style={{ borderRadius: 8 }} />
                     </Space>

@@ -349,16 +349,17 @@ async def rag_knowledge_sync(
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """只把 failed 的 RAG 文档重置为 pending 并重新投递 Celery 任务。
+    """把 failed 和 pending 的 RAG 文档重置为 pending 并重新投递 Celery 任务。
 
-    pending 已存在于队列中（或即将被 worker 消费），重复投递只会增加噪音，
-    因此手动重试仅针对 failed；skipped 表示文件已被删除，重试也无意义，同样不处理。
+    pending 可能因 Redis 重启等原因丢失队列消息，这里一并重新投递；
+    processing 正在被 worker 处理，跳过以保护并发，避免重复处理；
+    skipped 表示文件已被删除，重试无意义，不处理。
     """
     from datetime import datetime, timezone
     from app.models import RagDocument
 
     result = await db.execute(
-        select(RagDocument).where(RagDocument.status == "failed")
+        select(RagDocument).where(RagDocument.status.in_(["failed", "pending"]))
     )
     docs = result.scalars().all()
 
@@ -393,8 +394,95 @@ async def rag_knowledge_sync(
 
     return {
         "success": True,
-        "message": f"Reset {len(docs)} failed documents to pending.",
+        "message": f"Reset {len(docs)} failed/pending documents to pending.",
         "scheduled": len(docs),
+        "enqueued": enqueued,
+        "failed_enqueue": len(failed_ids),
+    }
+
+
+@router.post("/knowledge/rebuild")
+async def rag_knowledge_rebuild(
+    _: str = Depends(verify_admin_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """扫描 files 表中所有 Wiki 文件，补齐缺失的 RAG 入库任务。
+
+    - 无 RagDocument 的文件：创建记录并投递（created）
+    - RagDocument 为 failed/pending：重置为 pending 并重新投递（requeued）
+    - RagDocument 为 completed/processing/skipped：跳过（skipped）
+    - 投递失败：标记 failed 并计入 failed_enqueue
+    """
+    from datetime import datetime, timezone
+    from app.models import File, RagDocument
+    from rag.ingest_service import IngestService
+    from rag.tasks import enqueue_rag_document_task
+    from rag.task_worker import mark_rag_document_failed
+
+    files_result = await db.execute(select(File).order_by(File.id.asc()))
+    files = files_result.scalars().all()
+
+    # 一次性取出所有入库记录，按 file_id 建索引，避免逐文件查询
+    docs_result = await db.execute(select(RagDocument))
+    docs_by_file_id: dict[int, RagDocument] = {}
+    for doc in docs_result.scalars().all():
+        if doc.file_id is not None and doc.file_id not in docs_by_file_id:
+            docs_by_file_id[doc.file_id] = doc
+
+    created = 0
+    requeued = 0
+    skipped = 0
+    to_enqueue: list[int] = []
+
+    now = datetime.now(timezone.utc)
+    ingest = IngestService(db)
+
+    for file in files:
+        doc = docs_by_file_id.get(file.id)
+        if doc is None:
+            # 无入库记录：创建 pending 记录
+            new_doc = await ingest.ingest(file.id)
+            to_enqueue.append(new_doc.id)
+            created += 1
+        elif doc.status in ("failed", "pending"):
+            # 已有记录但失败或待处理：重置为 pending 重新入队
+            doc.status = "pending"
+            doc.error_message = None
+            doc.queued_at = now
+            doc.processing_started_at = None
+            doc.completed_at = None
+            doc.failed_at = None
+            doc.retry_count = 0
+            to_enqueue.append(doc.id)
+            requeued += 1
+        else:
+            # completed / processing / skipped：不重复处理
+            skipped += 1
+
+    await db.commit()
+
+    # 记录已落库后再投递，避免 worker 先于事务提交读到旧状态
+    enqueued = 0
+    failed_ids: list[int] = []
+    for doc_id in to_enqueue:
+        if enqueue_rag_document_task(doc_id):
+            enqueued += 1
+        else:
+            failed_ids.append(doc_id)
+
+    if failed_ids:
+        for doc_id in failed_ids:
+            await mark_rag_document_failed(doc_id, "Celery 任务投递失败（Redis 不可用）")
+
+    return {
+        "success": True,
+        "message": (
+            f"Rebuild finished: created {created}, requeued {requeued}, "
+            f"skipped {skipped}."
+        ),
+        "created": created,
+        "requeued": requeued,
+        "skipped": skipped,
         "enqueued": enqueued,
         "failed_enqueue": len(failed_ids),
     }

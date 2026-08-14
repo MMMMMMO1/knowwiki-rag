@@ -241,8 +241,8 @@ GET /api/v1/admin/knowledge/status
 
 ### RAG 知识库手动重试
 
-只把 `failed` 的文档重置为 `pending`（retry_count 清零），并批量重新投递 Celery 任务。
-`pending` 已在队列中，`skipped`（文件已删除）重试无意义，均不处理。
+把 `failed` 和 `pending` 的文档重置为 `pending`（retry_count 清零），并批量重新投递 Celery 任务。
+`pending` 可能因 Redis 重启等原因丢失队列消息，因此一并重投；`processing` 正在被 worker 处理则跳过保护；`skipped`（文件已删除）重试无意义，不处理。
 
 ```http
 POST /api/v1/admin/knowledge/sync
@@ -252,10 +252,61 @@ POST /api/v1/admin/knowledge/sync
 ```json
 {
   "success": true,
-  "message": "Reset 3 failed documents to pending.",
+  "message": "Reset 3 failed/pending documents to pending.",
   "scheduled": 3,
   "enqueued": 3,
   "failed_enqueue": 0
+}
+```
+
+---
+
+### RAG 知识库全量补齐
+
+扫描 `files` 表中所有 Wiki 文件，补齐缺失的 RAG 入库任务：
+
+- 无 `RagDocument` 的文件 → 创建记录并投递（`created`）
+- 已有记录但状态为 `failed`/`pending` → 重置并重新投递（`requeued`）
+- 状态为 `completed`/`processing`/`skipped` → 跳过（`skipped`）
+- 投递失败 → 标记 failed（`failed_enqueue`）
+
+```http
+POST /api/v1/admin/knowledge/rebuild
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Rebuild finished: created 5, requeued 2, skipped 10.",
+  "created": 5,
+  "requeued": 2,
+  "skipped": 10,
+  "enqueued": 7,
+  "failed_enqueue": 0
+}
+```
+
+---
+
+### RAG 配置可用性检查
+
+轻量状态接口，判断 `LLM_API_KEY`、`EMBEDDING_API_KEY`、Redis/Celery 队列配置是否具备。
+只返回 boolean 与缺失项名称，不输出任何密钥真实值。
+
+```http
+GET /api/v1/rag/config-status
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "ready": true,
+  "missing": [],
+  "llm_configured": true,
+  "embedding_configured": true,
+  "queue_configured": true
 }
 ```
 

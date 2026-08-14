@@ -1,0 +1,16 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+const API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://wiki-backend:8000';
+
+export async function GET(request: NextRequest) {
+    try {
+        const response = await fetch(`${API_URL}/api/v1/rag/config-status`, {
+            cache: 'no-store',
+        });
+        const data = await response.json();
+        return NextResponse.json(data, { status: response.status });
+    } catch (error) {
+        console.error('RAG config status proxy failed:', error);
+        return NextResponse.json({ success: false, detail: 'Connection error' }, { status: 500 });
+    }
+}
