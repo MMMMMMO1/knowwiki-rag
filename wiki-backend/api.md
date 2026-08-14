@@ -318,14 +318,22 @@ GET    /api/v1/admin/chat-sessions/{session_id}/messages
 ## 排查命令
 
 ```bash
-./start_wiki.sh status          # 查看所有服务状态（应含 redis、rag-worker）
-./start_wiki.sh logs            # 查看 wiki-web / wiki-backend 日志
-docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
-docker compose logs redis       # 查看 Redis 日志
+# 查看所有服务状态（应含 redis、rag-worker）
+./start_wiki.sh status
+# 查看 wiki-web / wiki-backend 日志
+./start_wiki.sh logs
+# 查看 RAG 入库 worker 日志
+docker compose logs rag-worker
+# 查看 Redis 日志
+docker compose logs redis
 ```
 
 ## 升级与构建说明
 
+- **历史目录名**：`wiki-backend/anythingllm/` 只是历史遗留的目录名，
+  目录内的 `compose.yml` / `compose.dev.yml` 编排的是当前 RAG 版服务
+  （wiki-web / wiki-backend / postgres / rustfs / redis / rag-worker），
+  不再运行 AnythingLLM。
 - **数据库迁移**：后端启动时会自动对已有数据库执行幂等迁移
   （`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，见
   `migrations/0001_add_rag_queue_fields.sql` 与 `app/core/database.py` 的
@@ -336,6 +344,6 @@ docker compose logs redis       # 查看 Redis 日志
   ```
   或通过 Compose 重新构建镜像：
   ```bash
-  ./start_wiki.sh restart
   # 等价于 docker compose -f wiki-backend/anythingllm/compose.yml up -d --build
+  ./start_wiki.sh restart
   ```

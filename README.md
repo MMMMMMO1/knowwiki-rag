@@ -3,6 +3,8 @@
 这是一个前后端分离的 Wiki 应用，包含 Next.js 前端、FastAPI 后端、自研 RAG 知识库、PostgreSQL（pgvector）、Redis/Celery 消息队列与 RustFS。当前推荐使用仓库根目录的启动脚本统一构建和运行容器环境。
 
 > **迁移说明**：项目原本使用 AnythingLLM 作为文档索引和聊天引擎，现已全面替换为自研 RAG 模块（`wiki-backend/rag/`）。AnythingLLM 容器、代码和配置已清理。
+>
+> **分支说明**：`rag-rewrite` 是自研 RAG 的独立版本分支，技术栈为自研 RAG + Redis/Celery 消息队列 + PostgreSQL pgvector，带管理端状态可观测，不依赖 AnythingLLM。
 
 ## 项目结构
 
@@ -11,8 +13,8 @@
   - `wiki-backend/rag/`：自研 RAG 模块（文档加载 → 切分 → 嵌入 → 向量检索 → LLM 问答）。
   - `rag/celery_app.py` + `rag/tasks.py`：Celery 任务调度（RAG 入库）。
   - `rag/task_worker.py`：单任务处理器（RagIndexingProcessor）。
-- `anythingllm/compose.yml`：默认容器编排文件（PostgreSQL、Redis、RustFS、Wiki 前后端、rag-worker）。
-- `anythingllm/compose.dev.yml`：dev 模式覆盖文件（历史兼容，当前 dev 模式与默认模式一致）。
+- `wiki-backend/anythingllm/compose.yml`：默认容器编排文件（PostgreSQL、Redis、RustFS、Wiki 前后端、rag-worker）。`anythingllm` 仅为历史目录名，当前不再运行 AnythingLLM。
+- `wiki-backend/anythingllm/compose.dev.yml`：dev 模式覆盖文件（历史兼容，当前 dev 模式与默认模式一致）。
 - `start.sh` / `start_wiki.sh`：仓库根目录的一键启动、停止、查看状态和日志入口。
 
 ## RAG 入库架构
@@ -42,9 +44,12 @@ pending → processing → completed
 ### 常用排查命令
 
 ```bash
-./start_wiki.sh status          # 查看所有服务状态（应含 redis、rag-worker）
-./start_wiki.sh logs            # 查看 wiki-web / wiki-backend 日志
-docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
+# 查看所有服务状态（应含 redis、rag-worker）
+./start_wiki.sh status
+# 查看 wiki-web / wiki-backend 日志
+./start_wiki.sh logs
+# 查看 RAG 入库 worker 日志
+docker compose logs rag-worker
 ```
 
 ## 快速启动

@@ -2,6 +2,8 @@
 
 > **迁移状态**：自研 RAG 已于 2026-08 全面替代 AnythingLLM。AnythingLLM 容器、代码、API 均已被 `wiki-backend/rag/` 模块替代。
 > 本文档保留设计决策和参考对比，供后续维护参考。
+>
+> **分支说明**：`rag-rewrite` 是自研 RAG 的独立版本分支。`wiki-backend/anythingllm/` 仅为历史目录名（内含当前 RAG 版 compose 编排与数据目录），不再运行 AnythingLLM。
 
 项目：wiki-main（Wiki 应用，FastAPI + PostgreSQL pgvector + S3 + Next.js）
 目标：自研 RAG 模块替代 AnythingLLM（已完成）
@@ -87,10 +89,14 @@ pending ──worker 消费──> processing ──成功──> completed
 启动后应包含 redis 和 rag-worker 两个新服务：
 
 ```bash
-./start_wiki.sh status          # 查看所有服务状态（应含 redis、rag-worker）
-./start_wiki.sh logs            # 查看 wiki-web / wiki-backend 日志
-docker compose logs rag-worker  # 查看 RAG 入库 worker 日志
-docker compose logs redis       # 查看 Redis 日志
+# 查看所有服务状态（应含 redis、rag-worker）
+./start_wiki.sh status
+# 查看 wiki-web / wiki-backend 日志
+./start_wiki.sh logs
+# 查看 RAG 入库 worker 日志
+docker compose logs rag-worker
+# 查看 Redis 日志
+docker compose logs redis
 ```
 
 **已有数据库升级**：后端启动时自动执行幂等迁移
