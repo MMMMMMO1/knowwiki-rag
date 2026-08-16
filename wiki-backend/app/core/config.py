@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     TOP_K: int = 5
     SYSTEM_PROMPT: str = ""
     # 混合检索开关：True 时向量检索 + 关键词全文检索（tsvector）用 RRF 融合；
-    # 默认 False 保持纯向量检索，向后兼容。
-    HYBRID_SEARCH: bool = False
+    # 默认 True 开启混合检索，中文场景效果更佳。
+    HYBRID_SEARCH: bool = True
     # Rerank switch: True re-ranks candidates after coarse recall, before format_context.
     # Default False keeps pure coarse recall, backward compatible.
     RERANK_ENABLED: bool = False
