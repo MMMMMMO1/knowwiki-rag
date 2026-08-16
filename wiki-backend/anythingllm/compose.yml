@@ -52,6 +52,10 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        # 说明：显式声明 build arg，compose 才会把 .env 里的 UV_DEFAULT_INDEX 传给 Dockerfile；
+        # 不声明的话 Dockerfile 里 ARG 的默认值（pypi.org）会生效，.env 写了白写。
+        UV_DEFAULT_INDEX: "${UV_DEFAULT_INDEX}"
     env_file:
       - path: ../../.env
         required: false

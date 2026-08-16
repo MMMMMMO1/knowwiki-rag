@@ -19,9 +19,9 @@ RUN pip install --no-cache-dir uv
 # 说明：
 # 先复制依赖清单并安装依赖，让后续业务代码变更时能复用依赖缓存。
 COPY pyproject.toml uv.lock ./
-# 说明：允许构建时用 --build-arg UV_INDEX_URL=<镜像源> 覆盖 PyPI 源，网络受限环境可加速。
-ARG UV_INDEX_URL="https://pypi.org/simple"
-ENV UV_INDEX_URL=${UV_INDEX_URL}
+# 说明：允许构建时用 --build-arg UV_DEFAULT_INDEX=<镜像源> 覆盖 PyPI 源，网络受限环境可加速。
+ARG UV_DEFAULT_INDEX="https://pypi.org/simple"
+ENV UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX}
 RUN uv sync --frozen --no-install-project
 RUN uv pip install pgvector 'markitdown[all]'
 

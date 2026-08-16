@@ -14,6 +14,7 @@ COMPOSE_FILE="${BACKEND_DIR}/anythingllm/compose.yml"
 DEV_COMPOSE_FILE="${BACKEND_DIR}/anythingllm/compose.dev.yml"
 
 CONFIG_ENV_KEYS=(
+  UV_DEFAULT_INDEX
   WEB_PORT
   WEB_BIND_HOST
   WEB_PUBLIC_HOST
