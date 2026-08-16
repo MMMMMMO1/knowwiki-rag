@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     # Coarse recall candidate count when rerank is on (should exceed TOP_K).
     RERANK_CANDIDATE_K: int = 20
 
+    # Memory settings: long-term memory distilled from conversations.
+    # MEMORY_ENABLED gates recall + extraction; default False keeps old behavior.
+    MEMORY_ENABLED: bool = False
+    # Whether to extract memories asynchronously after each turn via LLM.
+    MEMORY_EXTRACT_ENABLED: bool = True
+    # How many memories to recall and merge into context.
+    MEMORY_TOP_K: int = 3
+    # Explicit "remember" phrases that force a memory to be kept (importance=1.0).
+    MEMORY_EXPLICIT_KEYWORDS: list[str] = ["记住", "别忘了", "请记住"]
+
     # Redis / Celery 消息队列设置（RAG 入库任务调度）
     REDIS_URL: str = "redis://redis:6379/0"
     CELERY_BROKER_URL: str = "redis://redis:6379/0"

@@ -75,6 +75,54 @@ def enqueue_rag_document_task(rag_document_id: int) -> bool:
         return False
 
 
+@celery_app.task(name="rag.tasks.extract_memories")
+def extract_memories(
+    user_id: int,
+    workspace_id: str,
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> dict:
+    """异步提取长期记忆：LLM 审视一轮对话 → 向量化 → 写入 memories 表。
+
+    后台任务，失败静默降级（不阻断聊天主流程）。
+    """
+    from rag.memory_service import MemoryService
+
+    async def _run():
+        from app.core.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            service = MemoryService(db)
+            return await service.extract_and_save(
+                user_id, workspace_id, session_id, user_message, assistant_message
+            )
+
+    try:
+        saved = _run_async(_run())
+        return {"saved": saved}
+    except Exception:
+        # Memory extraction must never break the chat flow.
+        return {"saved": 0}
+
+
+def enqueue_memory_extraction(
+    user_id: int,
+    workspace_id: str,
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> bool:
+    """投递记忆提取任务到 Celery 队列。返回是否投递成功。"""
+    try:
+        extract_memories.delay(
+            user_id, workspace_id, session_id, user_message, assistant_message
+        )
+        return True
+    except Exception:
+        return False
+
+
 def enqueue_rag_document_tasks(rag_document_ids: list[int]) -> tuple[int, int]:
     """批量投递多个 RAG 入库任务。
 

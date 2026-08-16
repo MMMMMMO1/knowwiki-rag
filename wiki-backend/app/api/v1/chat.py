@@ -19,6 +19,7 @@ class ChatStreamRequest(BaseModel):
     prompt: Optional[str] = None
     model: Optional[str] = None
     temperature: Optional[float] = None
+    workspace_id: Optional[str] = None
 
 
 @router.post("/stream")
@@ -52,6 +53,9 @@ async def chat_stream(
         for log in recent_logs
     ]
 
+    # 命名空间：请求未指定时回退默认工作区，向后兼容
+    workspace_id = request.workspace_id or "default"
+
     # 2. 记录用户消息
     user_msg = models.ChatLog(
         user_id=current_user.id,
@@ -76,6 +80,8 @@ async def chat_stream(
                 model=request.model,
                 temperature=request.temperature,
                 chat_history=chat_history,
+                workspace_id=workspace_id,
+                user_id=current_user.id,
             ):
                 accumulated.append(token)
                 yield f"data: {json.dumps({'type': 'textResponseChunk', 'textResponse': token, 'sources': [], 'close': False})}\n\n"
@@ -94,6 +100,18 @@ async def chat_stream(
                 )
                 db.add(assistant_msg)
                 await db.commit()
+
+                # 4. 异步提取长期记忆（后台 Celery，不阻塞响应）
+                from app.core.config import settings
+                if settings.MEMORY_ENABLED and settings.MEMORY_EXTRACT_ENABLED:
+                    from rag.tasks import enqueue_memory_extraction
+                    enqueue_memory_extraction(
+                        user_id=current_user.id,
+                        workspace_id=workspace_id,
+                        session_id=request.session_id,
+                        user_message=request.message,
+                        assistant_message=full_text,
+                    )
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'abort', 'textResponse': None, 'sources': [], 'close': True, 'error': str(e)})}\n\n"

@@ -71,6 +71,8 @@ class VectorStore:
                 text=chunk.text,
                 # 关键词检索用：jieba 分词后的空格分隔文本，供 to_tsvector 建索引
                 search_text=_segment_text(chunk.text),
+                # Namespace written at ingest time; retrieval filters on it for isolation.
+                workspace_id=document.workspace_id,
                 embedding=vector,
                 metadata_=chunk.metadata,
             )
@@ -89,12 +91,14 @@ class VectorStore:
         self,
         query_vector: list[float],
         top_k: int = 5,
+        workspace_id: str = "default",
     ) -> list[dict[str, Any]]:
         """余弦相似度检索 —— 返回最相关的 Chunk。
 
         Args:
             query_vector: 查询文本的向量。
             top_k: 返回数量。
+            workspace_id: 命名空间过滤，只检索该工作区内的 chunk。
 
         Returns:
             列表，每项包含 chunk_id, text, score, metadata。
@@ -107,6 +111,7 @@ class VectorStore:
                 RagChunk.metadata_,
                 (1 - RagChunk.embedding.cosine_distance(query_vector)).label("score"),
             )
+            .where(RagChunk.workspace_id == workspace_id)
             .where(RagChunk.embedding.is_not(None))
             .order_by(RagChunk.embedding.cosine_distance(query_vector))
             .limit(top_k)
@@ -126,6 +131,7 @@ class VectorStore:
         self,
         query_text: str,
         top_k: int = 5,
+        workspace_id: str = "default",
     ) -> list[dict[str, Any]]:
         """关键词全文检索 —— tsvector + GIN 索引。
 
@@ -135,6 +141,7 @@ class VectorStore:
         Args:
             query_text: 用户问题原文。
             top_k: 返回数量。
+            workspace_id: 命名空间过滤，只检索该工作区内的 chunk。
 
         Returns:
             列表，每项包含 chunk_id, text, metadata, score。
@@ -150,6 +157,7 @@ class VectorStore:
                 RagChunk.metadata_,
                 func.ts_rank(tsv, tsquery).label("score"),
             )
+            .where(RagChunk.workspace_id == workspace_id)
             .where(RagChunk.search_text.is_not(None))
             .where(tsv.op("@@")(tsquery))
             .order_by(desc("score"))

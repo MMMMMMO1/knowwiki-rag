@@ -54,6 +54,16 @@ _HYBRID_SEARCH_MIGRATION_STATEMENTS = [
     "ON rag_chunks USING gin (to_tsvector('simple', search_text))",
 ]
 
+# Keep in sync with migrations/0003_add_workspace_and_memories.sql.
+# workspace_id is the namespace tag written at ingest time; retrieval filters on it.
+# Existing rows backfill 'default'; the memories table is created by create_all.
+_WORKSPACE_MEMORY_MIGRATION_STATEMENTS = [
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(100) NOT NULL DEFAULT 'default'",
+    "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(100) NOT NULL DEFAULT 'default'",
+    "CREATE INDEX IF NOT EXISTS ix_rag_documents_workspace_id ON rag_documents (workspace_id)",
+    "CREATE INDEX IF NOT EXISTS ix_rag_chunks_workspace_id ON rag_chunks (workspace_id)",
+]
+
 
 async def _apply_rag_queue_migration(conn) -> None:
     """幂等补齐 rag_documents 的消息队列列（对新建表为 no-op）。"""
@@ -69,6 +79,16 @@ async def _apply_hybrid_search_migration(conn) -> None:
     """幂等补齐 rag_chunks 的关键词检索列与 GIN 索引。"""
     try:
         for statement in _HYBRID_SEARCH_MIGRATION_STATEMENTS:
+            await conn.execute(text(statement))
+    except ProgrammingError:
+        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
+        pass
+
+
+async def _apply_workspace_memory_migration(conn) -> None:
+    """幂等补齐 rag_documents/rag_chunks 的 workspace_id 命名空间列。"""
+    try:
+        for statement in _WORKSPACE_MEMORY_MIGRATION_STATEMENTS:
             await conn.execute(text(statement))
     except ProgrammingError:
         # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
@@ -140,6 +160,8 @@ async def init_db():
         await _apply_rag_queue_migration(conn)
         # 幂等迁移：补齐关键词检索列与 GIN 索引
         await _apply_hybrid_search_migration(conn)
+        # 幂等迁移：补齐 workspace 命名空间列
+        await _apply_workspace_memory_migration(conn)
     print("Database tables initialized.")
 
     # Seed default admin user if no users exist

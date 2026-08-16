@@ -111,7 +111,7 @@ def test_retriever_hybrid_on_calls_keyword_and_fuses() -> None:
         with patch("rag.retriever.settings.HYBRID_SEARCH", True):
             results = await retriever.retrieve("query")
 
-        store.keyword_search.assert_awaited_once_with("query", top_k=3)
+        store.keyword_search.assert_awaited_once_with("query", top_k=3, workspace_id="default")
         assert results[0].chunk_id == "a"  # 两路都命中，RRF 分数最高
 
     asyncio.run(run())

@@ -18,9 +18,10 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
-    # 任务路由：所有 rag 入库任务进 rag-indexing 队列
+    # 任务路由：所有 rag 任务进 rag-indexing 队列
     task_routes={
         "rag.tasks.process_rag_document": {"queue": "rag-indexing"},
+        "rag.tasks.extract_memories": {"queue": "rag-indexing"},
     },
     task_serializer="json",
     result_serializer="json",

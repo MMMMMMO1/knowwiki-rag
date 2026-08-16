@@ -60,10 +60,12 @@ class Retriever:
         embedder: Embedder,
         vector_store: VectorStore,
         top_k: int | None = None,
+        workspace_id: str = "default",
     ):
         self.embedder = embedder
         self.vector_store = vector_store
         self.top_k = top_k or settings.TOP_K
+        self.workspace_id = workspace_id
 
     async def retrieve(self, query: str) -> list[RetrievalResult]:
         """检索与 query 最相关的 Chunk。
@@ -86,13 +88,17 @@ class Retriever:
         query_vector = query_vectors[0]
 
         # 2. 向量相似度搜索
-        vector_rows = await self.vector_store.search(query_vector, top_k=recall_k)
+        vector_rows = await self.vector_store.search(
+            query_vector, top_k=recall_k, workspace_id=self.workspace_id
+        )
 
         # 3. 混合检索：配置开启时叠加关键词检索，用 RRF 融合；默认只走向量，向后兼容
         if not settings.HYBRID_SEARCH:
             results = self._to_results(vector_rows)
         else:
-            keyword_rows = await self.vector_store.keyword_search(query, top_k=recall_k)
+            keyword_rows = await self.vector_store.keyword_search(
+                query, top_k=recall_k, workspace_id=self.workspace_id
+            )
             merged = rrf_fuse(vector_rows, keyword_rows, top_k=recall_k)
             results = self._to_results(merged)
 
