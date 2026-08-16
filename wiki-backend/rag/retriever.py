@@ -23,6 +23,40 @@ class RetrievalResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+# RRF 融合的常量 k：名次权重分母里的平滑项，业界常用 60。
+RRF_K = 60
+
+
+def rrf_fuse(
+    vector_rows: list[dict[str, Any]],
+    keyword_rows: list[dict[str, Any]],
+    top_k: int = 5,
+    k: int = RRF_K,
+) -> list[dict[str, Any]]:
+    """用 RRF（Reciprocal Rank Fusion）融合两路检索结果。
+
+    每路结果按名次贡献 1/(k + rank + 1)，同名次累加；
+    只比较名次、不比较原始分数绝对值，绕开余弦分与 ts_rank 分数量纲不一致的问题。
+    """
+    scores: dict[str, float] = {}
+    data: dict[str, dict[str, Any]] = {}
+
+    for rank, row in enumerate(vector_rows):
+        key = row["chunk_id"]
+        scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+        data[key] = row
+    for rank, row in enumerate(keyword_rows):
+        key = row["chunk_id"]
+        scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+        data[key] = row
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:top_k]
+    return [
+        {**data[key], "score": round(score, 6)}
+        for key, score in ranked
+    ]
+
+
 class Retriever:
     """RAG 检索器 —— 组合 Embedder 和 VectorStore。
 
@@ -59,9 +93,18 @@ class Retriever:
         query_vector = query_vectors[0]
 
         # 2. 向量相似度搜索
-        rows = await self.vector_store.search(query_vector, top_k=self.top_k)
+        vector_rows = await self.vector_store.search(query_vector, top_k=self.top_k)
 
-        # 3. 组装结果
+        # 3. 混合检索：配置开启时叠加关键词检索，用 RRF 融合；默认只走向量，向后兼容
+        if not settings.HYBRID_SEARCH:
+            return self._to_results(vector_rows)
+
+        keyword_rows = await self.vector_store.keyword_search(query, top_k=self.top_k)
+        merged = rrf_fuse(vector_rows, keyword_rows, top_k=self.top_k)
+        return self._to_results(merged)
+
+    def _to_results(self, rows: list[dict[str, Any]]) -> list[RetrievalResult]:
+        """把 vector_store 返回的 dict 列表组装成 RetrievalResult。"""
         return [
             RetrievalResult(
                 chunk_id=row["chunk_id"],

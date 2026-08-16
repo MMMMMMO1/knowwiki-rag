@@ -154,6 +154,9 @@ class RagChunk(Base):
     document_id = Column(Integer, ForeignKey("rag_documents.id", ondelete="CASCADE"), nullable=False, index=True)
     chunk_id = Column(String(36), unique=True, nullable=False, index=True)
     text = Column(Text, nullable=False)
+    # 应用层分词后的文本（空格分隔），供 tsvector 全文索引做关键词检索。
+    # 原始中文默认分词器切不动，所以由 Python jieba 切好后落库。
+    search_text = Column(Text, nullable=True)
     embedding = Column(Vector(1024), nullable=True)
     metadata_ = Column("metadata", JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

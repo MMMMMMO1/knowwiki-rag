@@ -8,11 +8,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RagChunk, RagDocument
 from rag.schemas import Chunk
+
+
+def _segment_text(raw: str) -> str:
+    """用 jieba 对中文分词，空格连接；jieba 未安装时退化为原文本。
+
+    中文是连续字符，Postgres 默认分词器切不动，因此分词放到应用层：
+    写入和查询都先用 jieba 切成词，再交给 to_tsvector/plainto_tsquery。
+    """
+    try:
+        import jieba  # 延迟导入，避免未安装时影响纯向量检索路径
+        return " ".join(jieba.cut(raw))
+    except ImportError:
+        return raw
 
 
 class VectorStore:
@@ -56,6 +69,8 @@ class VectorStore:
                 document_id=document.id,
                 chunk_id=chunk.chunk_id,
                 text=chunk.text,
+                # 关键词检索用：jieba 分词后的空格分隔文本，供 to_tsvector 建索引
+                search_text=_segment_text(chunk.text),
                 embedding=vector,
                 metadata_=chunk.metadata,
             )
@@ -94,6 +109,50 @@ class VectorStore:
             )
             .where(RagChunk.embedding.is_not(None))
             .order_by(RagChunk.embedding.cosine_distance(query_vector))
+            .limit(top_k)
+        )
+        result = await self.db.execute(query)
+        return [
+            {
+                "chunk_id": row.chunk_id,
+                "text": row.text,
+                "metadata": row.metadata_,
+                "score": round(float(row.score), 4),
+            }
+            for row in result.all()
+        ]
+
+    async def keyword_search(
+        self,
+        query_text: str,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """关键词全文检索 —— tsvector + GIN 索引。
+
+        query 与写入侧一样先用 jieba 分词，再 plainto_tsquery 生成查询，
+        用 ts_rank 打分（词频越高、越罕见，分数越高，类似 BM25 的效果）。
+
+        Args:
+            query_text: 用户问题原文。
+            top_k: 返回数量。
+
+        Returns:
+            列表，每项包含 chunk_id, text, metadata, score。
+        """
+        segmented = _segment_text(query_text)
+        tsv = func.to_tsvector("simple", RagChunk.search_text)
+        tsquery = func.plainto_tsquery("simple", segmented)
+
+        query = (
+            select(
+                RagChunk.chunk_id,
+                RagChunk.text,
+                RagChunk.metadata_,
+                func.ts_rank(tsv, tsquery).label("score"),
+            )
+            .where(RagChunk.search_text.is_not(None))
+            .where(tsv.op("@@")(tsquery))
+            .order_by(desc("score"))
             .limit(top_k)
         )
         result = await self.db.execute(query)

@@ -46,11 +46,29 @@ _RAG_QUEUE_MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS ix_rag_documents_retry_count ON rag_documents (retry_count)",
 ]
 
+# 与 migrations/0002_add_chunk_search_text.sql 保持一致。
+# search_text 存 jieba 分词后的空格分隔文本，GIN 索引建在 to_tsvector('simple', ...) 表达式上。
+_HYBRID_SEARCH_MIGRATION_STATEMENTS = [
+    "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS search_text TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_rag_chunks_search_text_tsv "
+    "ON rag_chunks USING gin (to_tsvector('simple', search_text))",
+]
+
 
 async def _apply_rag_queue_migration(conn) -> None:
     """幂等补齐 rag_documents 的消息队列列（对新建表为 no-op）。"""
     try:
         for statement in _RAG_QUEUE_MIGRATION_STATEMENTS:
+            await conn.execute(text(statement))
+    except ProgrammingError:
+        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
+        pass
+
+
+async def _apply_hybrid_search_migration(conn) -> None:
+    """幂等补齐 rag_chunks 的关键词检索列与 GIN 索引。"""
+    try:
+        for statement in _HYBRID_SEARCH_MIGRATION_STATEMENTS:
             await conn.execute(text(statement))
     except ProgrammingError:
         # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
@@ -120,6 +138,8 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         # 幂等迁移：为已有数据库补齐消息队列新增列（create_all 不会修改已存在的表）
         await _apply_rag_queue_migration(conn)
+        # 幂等迁移：补齐关键词检索列与 GIN 索引
+        await _apply_hybrid_search_migration(conn)
     print("Database tables initialized.")
 
     # Seed default admin user if no users exist
