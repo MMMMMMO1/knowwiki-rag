@@ -63,6 +63,8 @@ services:
       S3_ENDPOINT_URL: http://rustfs:9000
       # 说明：LLM_API_URL / LLM_API_KEY / EMBEDDING_API_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL
       # 等所有应用级配置，均通过 env_file 从 ../../.env 读取，不在此处重复定义。
+    # 说明：显式声明后端启动命令，避免镜像 CMD 被覆盖（如 docker commit）后跑成别的进程。
+    command: uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000
     expose:
       - "8000"
     depends_on:

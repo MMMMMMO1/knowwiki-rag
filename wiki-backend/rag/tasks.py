@@ -13,6 +13,24 @@ from rag.exceptions import RetryableIndexingError
 from rag.task_worker import RagIndexingProcessor
 
 
+def _run_async(coro):
+    """在独立事件循环中执行异步任务，并在循环关闭前 dispose 数据库连接池。
+
+    Celery 每个任务调用一次 asyncio.run()，若连接池里的 asyncpg 连接跨事件循环
+    泄漏，下一次任务会触发 "RuntimeError: Event loop is closed"。
+    每次任务结束就 dispose，保证连接不跨循环。
+    """
+
+    async def _wrapped():
+        try:
+            return await coro
+        finally:
+            from app.core.database import engine
+            await engine.dispose()
+
+    return asyncio.run(_wrapped())
+
+
 @celery_app.task(
     bind=True,
     name="rag.tasks.process_rag_document",
@@ -27,7 +45,7 @@ def process_rag_document(self, rag_document_id: int) -> dict:
     processor = RagIndexingProcessor()
 
     try:
-        status = asyncio.run(processor.process(rag_document_id))
+        status = _run_async(processor.process(rag_document_id))
         return {"rag_document_id": rag_document_id, "status": status}
     except RetryableIndexingError as exc:
         # 还有重试机会：交给 Celery 延迟后自动重试
@@ -37,7 +55,7 @@ def process_rag_document(self, rag_document_id: int) -> dict:
                 countdown=settings.RAG_TASK_RETRY_DELAY_SECONDS,
             )
         # 达到最大重试次数：改写为最终失败文案（去掉误导性的「将自动重试」）
-        asyncio.run(processor.finalize_failed(rag_document_id, str(exc)))
+        _run_async(processor.finalize_failed(rag_document_id, str(exc)))
         return {"rag_document_id": rag_document_id, "status": "failed"}
     except Exception:
         # 不可重试错误：状态已由 processor 标记为 failed，这里不再重试
