@@ -4,23 +4,13 @@
 编排 Embedder + VectorStore，将用户自然语言问题转换为最相关的 Chunk 列表。
 """
 
-from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import settings
 from rag.embedding import Embedder
-from rag.schemas import Chunk
+from rag.reranker import OpenAIReranker, Reranker
+from rag.schemas import Chunk, RetrievalResult
 from rag.vector_store import VectorStore
-
-
-@dataclass
-class RetrievalResult:
-    """单条检索结果。"""
-
-    chunk_id: str
-    text: str
-    score: float
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # RRF 融合的常量 k：名次权重分母里的平滑项，业界常用 60。
@@ -87,21 +77,36 @@ class Retriever:
         if not query.strip():
             return []
 
+        # Recall size: when rerank is enabled, recall more candidates, then truncate to top_k
+        recall_k = settings.RERANK_CANDIDATE_K if settings.RERANK_ENABLED else self.top_k
+
         # 1. 把问题向量化（和索引阶段用同一个 Embedder）
         query_chunk = Chunk.create(doc_id="query", text=query)
         query_vectors = await self.embedder.embed([query_chunk])
         query_vector = query_vectors[0]
 
         # 2. 向量相似度搜索
-        vector_rows = await self.vector_store.search(query_vector, top_k=self.top_k)
+        vector_rows = await self.vector_store.search(query_vector, top_k=recall_k)
 
         # 3. 混合检索：配置开启时叠加关键词检索，用 RRF 融合；默认只走向量，向后兼容
         if not settings.HYBRID_SEARCH:
-            return self._to_results(vector_rows)
+            results = self._to_results(vector_rows)
+        else:
+            keyword_rows = await self.vector_store.keyword_search(query, top_k=recall_k)
+            merged = rrf_fuse(vector_rows, keyword_rows, top_k=recall_k)
+            results = self._to_results(merged)
 
-        keyword_rows = await self.vector_store.keyword_search(query, top_k=self.top_k)
-        merged = rrf_fuse(vector_rows, keyword_rows, top_k=self.top_k)
-        return self._to_results(merged)
+        # 4. Re-rank: when enabled, re-score candidates with a cross-encoder reranker, keep top_k
+        if settings.RERANK_ENABLED and results:
+            reranker = self._build_reranker()
+            results = await reranker.rerank(query, results)
+            results = results[: self.top_k]
+
+        return results
+
+    def _build_reranker(self) -> Reranker:
+        """Build the reranker instance; defaults to OpenAI-compatible /rerank."""
+        return OpenAIReranker()
 
     def _to_results(self, rows: list[dict[str, Any]]) -> list[RetrievalResult]:
         """把 vector_store 返回的 dict 列表组装成 RetrievalResult。"""

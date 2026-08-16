@@ -56,3 +56,13 @@ class Chunk:
             text=text,
             metadata=metadata or {},
         )
+
+
+@dataclass
+class RetrievalResult:
+    """单条检索结果（粗召回与精排后统一使用）。"""
+
+    chunk_id: str
+    text: str
+    score: float
+    metadata: dict[str, Any] = field(default_factory=dict)

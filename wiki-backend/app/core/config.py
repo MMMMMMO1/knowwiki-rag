@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     # 混合检索开关：True 时向量检索 + 关键词全文检索（tsvector）用 RRF 融合；
     # 默认 False 保持纯向量检索，向后兼容。
     HYBRID_SEARCH: bool = False
+    # Rerank switch: True re-ranks candidates after coarse recall, before format_context.
+    # Default False keeps pure coarse recall, backward compatible.
+    RERANK_ENABLED: bool = False
+    # OpenAI-compatible /rerank endpoint URL (required when RERANK_ENABLED=True).
+    RERANK_API_URL: str = ""
+    # rerank API key; falls back to EMBEDDING_API_KEY when empty (same vendor most likely).
+    RERANK_API_KEY: str = ""
+    # rerank model name; bge-reranker family is the common choice.
+    RERANK_MODEL: str = "bge-reranker-v2-m3"
+    # Coarse recall candidate count when rerank is on (should exceed TOP_K).
+    RERANK_CANDIDATE_K: int = 20
 
     # Redis / Celery 消息队列设置（RAG 入库任务调度）
     REDIS_URL: str = "redis://redis:6379/0"
