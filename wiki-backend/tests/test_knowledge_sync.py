@@ -92,7 +92,7 @@ def test_knowledge_rebuild_creates_and_requeues() -> None:
     fake_db = FakeDB()
     with patch("rag.ingest_service.IngestService", FakeIngest), \
             patch("rag.tasks.enqueue_rag_document_task", return_value=True):
-        resp = asyncio.run(rag_knowledge_rebuild("dummy-token", fake_db))
+        resp = asyncio.run(rag_knowledge_rebuild(False, "dummy-token", fake_db))
 
     # file 1 无记录 → created；file 2 failed → requeued；file 3 completed → skipped
     assert resp["created"] == 1

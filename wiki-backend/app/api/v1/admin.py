@@ -106,17 +106,20 @@ async def add_folder(
 async def upload_file(
     file: UploadFile = FastAPIFile(...),
     folder_id: int | None = Form(None),
+    overwrite: bool = Form(False),
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ) -> UploadResponse:
     """
     Upload a file to the wiki.
-    
+
     **Requires Bearer token authentication.**
-    
+
     - **file**: File to upload (.md, .html, .docx, .txt, .pdf)
     - **folder_id**: Optional parent folder ID
-    
+    - **overwrite**: If true, overwrite the existing file with the same path
+      and re-enqueue RAG indexing (default false).
+
     The file will be saved to S3 and a file record will be created.
     Knowledge sync is scheduled asynchronously after the Wiki write succeeds.
     """
@@ -162,7 +165,7 @@ async def upload_file(
     
     # Check if file already exists in db
     existing = await get_file_by_full_path(db, full_path)
-    if existing:
+    if existing and not overwrite:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File already exists: {full_path}",
@@ -181,16 +184,26 @@ async def upload_file(
             detail=f"Failed to save file to S3: {str(e)}",
         )
     
-    # Create file db record
-    file_node = await create_file(
-        db=db,
-        folder_id=folder_id,
-        title=normalize_title(filename),
-        slug=slug,
-        full_path=full_path,
-        storage_key=storage_key,
-        sort_order=extract_sort_order(filename),
-    )
+    if existing:
+        # 覆盖：保留原 File 记录，更新必要字段；RAG 记录由 IngestService 幂等重置，
+        # 旧 chunks 由 worker 入库流水线在写入前清理（delete_by_document）。
+        file_node = existing
+        file_node.title = normalize_title(filename)
+        file_node.slug = slug
+        file_node.storage_key = storage_key
+        file_node.sort_order = extract_sort_order(filename)
+        file_node.folder_id = folder_id
+    else:
+        # Create file db record
+        file_node = await create_file(
+            db=db,
+            folder_id=folder_id,
+            title=normalize_title(filename),
+            slug=slug,
+            full_path=full_path,
+            storage_key=storage_key,
+            sort_order=extract_sort_order(filename),
+        )
 
     # 创建或重置 RAG 索引记录（幂等，不执行实际解析/向量化）
     from rag.ingest_service import IngestService
@@ -203,11 +216,19 @@ async def upload_file(
     from rag.tasks import enqueue_rag_document_task
     queued = enqueue_rag_document_task(rag_doc.id)
     if queued:
-        upload_message = f"File uploaded successfully: {full_path}. RAG indexing task queued."
+        upload_message = (
+            "File overwritten and RAG indexing task queued."
+            if overwrite
+            else f"File uploaded successfully: {full_path}. RAG indexing task queued."
+        )
     else:
         from rag.task_worker import mark_rag_document_failed
         await mark_rag_document_failed(rag_doc.id, "Celery 任务投递失败（Redis 不可用）")
-        upload_message = f"文件上传成功，但知识库入队失败: {full_path}"
+        upload_message = (
+            f"文件覆盖成功，但知识库入队失败: {full_path}"
+            if overwrite
+            else f"文件上传成功，但知识库入队失败: {full_path}"
+        )
 
     return UploadResponse(
         success=True,
@@ -403,15 +424,22 @@ async def rag_knowledge_sync(
 
 @router.post("/knowledge/rebuild")
 async def rag_knowledge_rebuild(
+    force: bool = False,
     _: str = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """扫描 files 表中所有 Wiki 文件，补齐缺失的 RAG 入库任务。
+    """扫描 files 表中所有 Wiki 文件，补齐/重建 RAG 入库任务。
 
+    force=False（默认）：
     - 无 RagDocument 的文件：创建记录并投递（created）
     - RagDocument 为 failed/pending：重置为 pending 并重新投递（requeued）
-    - RagDocument 为 completed/processing/skipped：跳过（skipped）
-    - 投递失败：标记 failed 并计入 failed_enqueue
+    - RagDocument 为 completed/skipped：跳过（skipped）
+
+    force=True（强制全量重建，用于 metadata/schema 规则升级）：
+    - completed/skipped/failed/pending 全部重置为 pending 并重新投递（requeued）
+
+    两种模式下 processing 都跳过（skipped_processing），避免打断正在处理的 worker。
+    投递失败：标记 failed 并计入 failed_enqueue。
     """
     from datetime import datetime, timezone
     from app.models import File, RagDocument
@@ -432,10 +460,20 @@ async def rag_knowledge_rebuild(
     created = 0
     requeued = 0
     skipped = 0
+    skipped_processing = 0
     to_enqueue: list[int] = []
 
     now = datetime.now(timezone.utc)
     ingest = IngestService(db)
+
+    def _reset_pending(doc: RagDocument) -> None:
+        doc.status = "pending"
+        doc.error_message = None
+        doc.queued_at = now
+        doc.processing_started_at = None
+        doc.completed_at = None
+        doc.failed_at = None
+        doc.retry_count = 0
 
     for file in files:
         doc = docs_by_file_id.get(file.id)
@@ -444,19 +482,21 @@ async def rag_knowledge_rebuild(
             new_doc = await ingest.ingest(file.id)
             to_enqueue.append(new_doc.id)
             created += 1
+        elif doc.status == "processing":
+            # processing 正在被 worker 处理：两种模式都跳过，保护并发
+            skipped_processing += 1
+        elif force:
+            # 强制重建：completed/skipped/failed/pending 全部重置重新入队
+            _reset_pending(doc)
+            to_enqueue.append(doc.id)
+            requeued += 1
         elif doc.status in ("failed", "pending"):
-            # 已有记录但失败或待处理：重置为 pending 重新入队
-            doc.status = "pending"
-            doc.error_message = None
-            doc.queued_at = now
-            doc.processing_started_at = None
-            doc.completed_at = None
-            doc.failed_at = None
-            doc.retry_count = 0
+            # 默认：重置 failed/pending 重新入队
+            _reset_pending(doc)
             to_enqueue.append(doc.id)
             requeued += 1
         else:
-            # completed / processing / skipped：不重复处理
+            # 默认：completed / skipped 不重复处理
             skipped += 1
 
     await db.commit()
@@ -477,14 +517,91 @@ async def rag_knowledge_rebuild(
     return {
         "success": True,
         "message": (
-            f"Rebuild finished: created {created}, requeued {requeued}, "
-            f"skipped {skipped}."
+            f"Rebuild finished: forced={force}, created {created}, "
+            f"requeued {requeued}, skipped {skipped}, "
+            f"skipped_processing {skipped_processing}."
         ),
+        "forced": force,
         "created": created,
         "requeued": requeued,
         "skipped": skipped,
+        "skipped_processing": skipped_processing,
         "enqueued": enqueued,
         "failed_enqueue": len(failed_ids),
+    }
+
+
+@router.get("/knowledge/files")
+async def rag_knowledge_files(
+    _: str = Depends(verify_admin_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回扁平文件列表，附带每个文件的 RAG 索引状态。"""
+    from app.models import File, RagDocument
+
+    files_result = await db.execute(select(File).order_by(File.id.asc()))
+    files = files_result.scalars().all()
+
+    # 每个 file_id 取最新一条 RagDocument（ingest 幂等保证同一 file_id 不重复）
+    docs_result = await db.execute(
+        select(RagDocument).order_by(RagDocument.id.desc())
+    )
+    docs_by_file_id: dict[int, RagDocument] = {}
+    for doc in docs_result.scalars().all():
+        if doc.file_id is not None and doc.file_id not in docs_by_file_id:
+            docs_by_file_id[doc.file_id] = doc
+
+    items = []
+    for file in files:
+        doc = docs_by_file_id.get(file.id)
+        items.append({
+            "id": file.id,
+            "title": file.title,
+            "full_path": file.full_path,
+            "storage_key": file.storage_key,
+            "rag_status": doc.status if doc else "not_indexed",
+            "rag_chunk_count": doc.chunk_count if doc else 0,
+            "rag_queued_at": doc.queued_at.isoformat() if doc and doc.queued_at else None,
+            "rag_completed_at": doc.completed_at.isoformat() if doc and doc.completed_at else None,
+            "rag_failed_at": doc.failed_at.isoformat() if doc and doc.failed_at else None,
+            "rag_error_message": doc.error_message if doc else None,
+        })
+
+    return {"success": True, "files": items}
+
+
+@router.post("/knowledge/rebuild-file/{file_id}")
+async def rag_rebuild_file(
+    file_id: int,
+    _: str = Depends(verify_admin_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """重建单个文件的 RAG 索引：复用 IngestService 重置记录并重新入队。"""
+    from rag.ingest_service import IngestService
+    from rag.tasks import enqueue_rag_document_task
+    from rag.task_worker import mark_rag_document_failed
+
+    try:
+        service = IngestService(db)
+        doc = await service.ingest(file_id=file_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    queued = enqueue_rag_document_task(doc.id)
+    if not queued:
+        await mark_rag_document_failed(doc.id, "Celery 任务投递失败（Redis 不可用）")
+        raise HTTPException(
+            status_code=500,
+            detail="Celery 任务投递失败（Redis 不可用）",
+        )
+
+    return {
+        "success": True,
+        "message": f"Rebuild queued for file {file_id}.",
+        "file_id": file_id,
+        "rag_document_id": doc.id,
+        "status": doc.status,
     }
 
 
