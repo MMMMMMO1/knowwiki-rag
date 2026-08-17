@@ -188,14 +188,19 @@ class RagIndexingProcessor:
     async def _run_pipeline(self, db: AsyncSession, doc: RagDocument) -> None:
         """加载 → 解析 → 切分 → 嵌入 → 写入。"""
         # 1. 从 S3/RustFS 读原始字节
-        content_bytes = await self._load_raw_bytes(db, doc)
+        content_bytes, file = await self._load_raw_bytes(db, doc)
 
-        # 2. MarkItDown 统一解析
+        # 2. MarkItDown 统一解析（补齐 source metadata，供检索结果溯源）
         loader = DocumentLoader()
         document = loader.load_bytes(
             file_name=doc.title,
             content=content_bytes,
-            metadata={"file_id": doc.file_id},
+            metadata={
+                "file_id": doc.file_id,
+                "title": file.title,
+                "full_path": file.full_path,
+                "storage_key": file.storage_key,
+            },
         )
 
         # 3. 空文本检测（不可重试）
@@ -218,8 +223,10 @@ class RagIndexingProcessor:
         vectors = await embedder.embed(chunks)
         await store.insert(doc, chunks, vectors)
 
-    async def _load_raw_bytes(self, db: AsyncSession, doc: RagDocument) -> bytes:
-        """从 S3 读取文件原始字节。"""
+    async def _load_raw_bytes(
+        self, db: AsyncSession, doc: RagDocument
+    ) -> tuple[bytes, "File"]:
+        """从 S3 读取文件原始字节。返回 (content_bytes, file)。"""
         from app.models import File
         from app.core.storage import get_file_content
 
@@ -238,7 +245,7 @@ class RagIndexingProcessor:
             raise RetryableIndexingError(
                 f"S3 文件为空或不存在: {file.storage_key}"
             )
-        return content_bytes
+        return content_bytes, file
 
 
 async def reset_stale_processing_documents() -> list[int]:

@@ -62,7 +62,7 @@ async def rag_ingest(
         id=doc.id,
         file_id=doc.file_id,
         title=doc.title,
-        status=doc.status,
+        status="failed" if not queued else doc.status,
     )
 
 

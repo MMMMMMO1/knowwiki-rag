@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 50
     TOP_K: int = 5
     SYSTEM_PROMPT: str = ""
+    # 默认生成温度（安全默认值，管理员可通过请求体覆盖）
+    LLM_TEMPERATURE: float = 0.7
     # 混合检索开关：True 时向量检索 + 关键词全文检索（tsvector）用 RRF 融合；
     # 默认 True 开启混合检索，中文场景效果更佳。
     HYBRID_SEARCH: bool = True

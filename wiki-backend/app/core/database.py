@@ -64,6 +64,19 @@ _WORKSPACE_MEMORY_MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS ix_rag_chunks_workspace_id ON rag_chunks (workspace_id)",
 ]
 
+# Keep in sync with migrations/0004_add_vector_indexes.sql.
+# HNSW index accelerates cosine-distance nearest-neighbor search as data grows.
+# NOTE: building an HNSW index on an existing large table can block startup for a
+# long time. This automatic migration targets dev environments / near-empty tables;
+# for production with existing data, run migrations/0004_add_vector_indexes.sql
+# manually during a low-traffic window instead.
+_VECTOR_INDEX_MIGRATION_STATEMENTS = [
+    "CREATE INDEX IF NOT EXISTS ix_rag_chunks_embedding_hnsw "
+    "ON rag_chunks USING hnsw (embedding vector_cosine_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_memories_embedding_hnsw "
+    "ON memories USING hnsw (embedding vector_cosine_ops)",
+]
+
 
 async def _apply_rag_queue_migration(conn) -> None:
     """幂等补齐 rag_documents 的消息队列列（对新建表为 no-op）。"""
@@ -89,6 +102,16 @@ async def _apply_workspace_memory_migration(conn) -> None:
     """幂等补齐 rag_documents/rag_chunks 的 workspace_id 命名空间列。"""
     try:
         for statement in _WORKSPACE_MEMORY_MIGRATION_STATEMENTS:
+            await conn.execute(text(statement))
+    except ProgrammingError:
+        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
+        pass
+
+
+async def _apply_vector_index_migration(conn) -> None:
+    """幂等创建 embedding 列的 HNSW 向量索引。"""
+    try:
+        for statement in _VECTOR_INDEX_MIGRATION_STATEMENTS:
             await conn.execute(text(statement))
     except ProgrammingError:
         # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
@@ -162,6 +185,8 @@ async def init_db():
         await _apply_hybrid_search_migration(conn)
         # 幂等迁移：补齐 workspace 命名空间列
         await _apply_workspace_memory_migration(conn)
+        # 幂等迁移：创建 embedding 列的 HNSW 向量索引
+        await _apply_vector_index_migration(conn)
     print("Database tables initialized.")
 
     # Seed default admin user if no users exist

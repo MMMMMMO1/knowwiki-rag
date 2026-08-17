@@ -22,6 +22,19 @@ class ChatStreamRequest(BaseModel):
     workspace_id: Optional[str] = None
 
 
+def _resolve_chat_overrides(
+    request: ChatStreamRequest,
+    current_user: models.User,
+) -> tuple[Optional[str], Optional[str], Optional[float]]:
+    """仅 admin 可覆盖 prompt/model/temperature；普通用户返回 None（走服务端配置）。
+
+    防止前端伪造参数绕过成本控制或安全策略。
+    """
+    if current_user.role == "admin":
+        return request.prompt, request.model, request.temperature
+    return None, None, None
+
+
 @router.post("/stream")
 async def chat_stream(
     request: ChatStreamRequest,
@@ -56,6 +69,12 @@ async def chat_stream(
     # 命名空间：请求未指定时回退默认工作区，向后兼容
     workspace_id = request.workspace_id or "default"
 
+    # 权限：仅 admin 可覆盖 prompt/model/temperature；普通用户一律使用服务端配置，
+    # 防止前端伪造参数绕过成本控制或安全策略。
+    override_prompt, override_model, override_temperature = _resolve_chat_overrides(
+        request, current_user
+    )
+
     # 2. 记录用户消息
     user_msg = models.ChatLog(
         user_id=current_user.id,
@@ -76,9 +95,9 @@ async def chat_stream(
             async for token in service.ask_stream(
                 request.message,
                 db,
-                prompt=request.prompt,
-                model=request.model,
-                temperature=request.temperature,
+                prompt=override_prompt,
+                model=override_model,
+                temperature=override_temperature,
                 chat_history=chat_history,
                 workspace_id=workspace_id,
                 user_id=current_user.id,

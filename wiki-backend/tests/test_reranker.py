@@ -84,9 +84,10 @@ def test_retriever_rerank_disabled_passthrough() -> None:
         ])
 
         retriever = Retriever(embedder, store, top_k=3)
-        with patch("rag.retriever.settings.RERANK_ENABLED", False):
-            with patch.object(Retriever, "_build_reranker") as build_mock:
-                results = await retriever.retrieve("query")
+        with patch("rag.retriever.settings.HYBRID_SEARCH", False):
+            with patch("rag.retriever.settings.RERANK_ENABLED", False):
+                with patch.object(Retriever, "_build_reranker") as build_mock:
+                    results = await retriever.retrieve("query")
 
         assert len(results) == 3
         build_mock.assert_not_called()
@@ -118,10 +119,11 @@ def test_retriever_rerank_enabled_recalls_more_and_truncates() -> None:
         reranker.rerank = AsyncMock(side_effect=fake_rerank)
 
         retriever = Retriever(embedder, store, top_k=5)
-        with patch("rag.retriever.settings.RERANK_ENABLED", True):
-            with patch("rag.retriever.settings.RERANK_CANDIDATE_K", 20):
-                with patch.object(Retriever, "_build_reranker", return_value=reranker):
-                    results = await retriever.retrieve("query")
+        with patch("rag.retriever.settings.HYBRID_SEARCH", False):
+            with patch("rag.retriever.settings.RERANK_ENABLED", True):
+                with patch("rag.retriever.settings.RERANK_CANDIDATE_K", 20):
+                    with patch.object(Retriever, "_build_reranker", return_value=reranker):
+                        results = await retriever.retrieve("query")
 
         # 粗召回 20 条
         store.search.assert_awaited_once()

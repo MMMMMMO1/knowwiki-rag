@@ -49,27 +49,35 @@ class LLM:
         self,
         messages: list[dict[str, Any]],
         temperature: float = 0.7,
+        max_tokens: int | None = None,
+        timeout: float = 120.0,
     ) -> str:
         """发送 messages 并返回完整回答。
 
         Args:
             messages: PromptBuilder.build() 产出的 messages 列表。
             temperature: 生成温度。
+            max_tokens: 最大输出 token 数（None 表示不限）。
+            timeout: 请求超时秒数。
 
         Returns:
             LLM 的完整回答文本。
         """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self.api_url}/chat/completions",
                 headers=self._headers,
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "stream": False,
-                },
-                timeout=120.0,
+                json=payload,
+                timeout=timeout,
             )
             response.raise_for_status()
             data = response.json()

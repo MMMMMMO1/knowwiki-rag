@@ -110,13 +110,13 @@ class TextSplitter:
         self.chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP
 
     def split(self, document: Document) -> list[Chunk]:
-        """将一个 Document 切分为多个 Chunk。"""
+        """将一个 Document 切分为多个 Chunk，metadata 带 chunk_index。"""
         texts = split_text(document.content, self.chunk_size, self.chunk_overlap)
         return [
             Chunk.create(
                 doc_id=document.doc_id,
                 text=text,
-                metadata={**document.metadata},
+                metadata={**document.metadata, "chunk_index": index},
             )
-            for text in texts
+            for index, text in enumerate(texts)
         ]
