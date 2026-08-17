@@ -162,6 +162,76 @@ class ChatService:
         temp = temperature if temperature is not None else settings.LLM_TEMPERATURE
         return await llm.chat(messages, temperature=temp)
 
+    async def debug(
+        self,
+        question: str,
+        db: AsyncSession,
+        chat_history: list[dict[str, str]] | None = None,
+        workspace_id: str = "default",
+        user_id: int | None = None,
+        prompt: str | None = None,
+    ) -> dict:
+        """运行完整检索链路并返回各阶段中间结果（不调用 LLM 生成回答）。"""
+        retrieval_query = await self._rewrite_query(question, chat_history)
+
+        store = VectorStore(db)
+        embedder = Embedder()
+        retriever = Retriever(embedder, store, workspace_id=workspace_id)
+        retrieval = await retriever.retrieve_debug(retrieval_query)
+
+        # 记忆召回（与检索一致，使用 retrieval_query）
+        memory_texts: list[str] = []
+        if settings.MEMORY_ENABLED and user_id is not None:
+            memory_texts = await self._recall_memories(
+                db, user_id, workspace_id, retrieval_query
+            )
+
+        # 组装 prompt（不调用 LLM，只返回 messages 供排查）
+        results = self._dicts_to_results(retrieval["final_results"])
+        context = self._build_context(retriever, results, memory_texts)
+        builder = PromptBuilder(system_prompt=prompt)
+        messages = builder.build(
+            question=question,
+            context=context,
+            chat_history=chat_history,
+        )
+
+        return {
+            "original_question": question,
+            "retrieval_query": retrieval_query,
+            "chat_history": chat_history or [],
+            "vector_results": retrieval["vector_results"],
+            "keyword_results": retrieval["keyword_results"],
+            "merged_results": retrieval["merged_results"],
+            "rerank_results": retrieval["rerank_results"],
+            "final_sources": retrieval["final_results"],
+            "memory_texts": memory_texts,
+            "prompt_messages": messages,
+            "model": settings.LLM_MODEL,
+            "temperature": settings.LLM_TEMPERATURE,
+        }
+
+    @staticmethod
+    def _dicts_to_results(items: list[dict]) -> list:
+        """把 debug 的统一 dict 转回 RetrievalResult，供 _build_context 复用。"""
+        from rag.schemas import RetrievalResult
+
+        return [
+            RetrievalResult(
+                chunk_id=item["chunk_id"],
+                text=item["text"],
+                score=item["score"],
+                metadata={
+                    "title": item.get("title", ""),
+                    "full_path": item.get("full_path", ""),
+                    "storage_key": item.get("storage_key", ""),
+                    "file_id": item.get("file_id"),
+                    "chunk_index": item.get("chunk_index"),
+                },
+            )
+            for item in items
+        ]
+
     async def _rewrite_query(
         self,
         question: str,

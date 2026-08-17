@@ -878,3 +878,62 @@ h1, h2, h3, h4, h5, h6 {
 .uppy-wrapper .uppy-DashboardItem-status {
   font-family: var(--font-body) !important;
 }
+
+/* ── Chat source citations（回答引用来源）── */
+.wiki-chat-sources {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 8px;
+  background: var(--color-surface-container-low);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wiki-chat-sources__heading {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--color-on-surface-variant);
+}
+
+.wiki-chat-sources__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wiki-chat-sources__item {
+  padding: 6px 0;
+  border-top: 1px dashed var(--color-outline-variant);
+}
+
+.wiki-chat-sources__item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.wiki-chat-sources__meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.wiki-chat-sources__title {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.wiki-chat-sources__path {
+  color: var(--color-on-surface-variant);
+}
+
+.wiki-chat-sources__score {
+  margin-left: auto;
+  color: var(--color-on-surface-variant);
+}
+
+.wiki-chat-sources__text {
+  margin: 4px 0 0;
+  color: var(--color-on-surface);
+}

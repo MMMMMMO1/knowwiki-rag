@@ -110,6 +110,89 @@ class Retriever:
 
         return results
 
+    async def retrieve_debug(self, query: str) -> dict[str, Any]:
+        """检索并返回各阶段中间结果（供 debug 接口使用，不改变生产路径）。
+
+        返回 dict：vector_results / keyword_results / merged_results /
+        rerank_results / final_results，每条统一为可序列化 dict。
+        """
+        debug: dict[str, Any] = {
+            "vector_results": [],
+            "keyword_results": [],
+            "merged_results": [],
+            "rerank_results": [],
+            "final_results": [],
+        }
+        if not query.strip():
+            return debug
+
+        recall_k = settings.RERANK_CANDIDATE_K if settings.RERANK_ENABLED else self.top_k
+
+        # 1. 把问题向量化（和索引阶段用同一个 Embedder）
+        query_chunk = Chunk.create(doc_id="query", text=query)
+        query_vectors = await self.embedder.embed([query_chunk])
+        query_vector = query_vectors[0]
+
+        # 2. 向量相似度搜索
+        vector_rows = await self.vector_store.search(
+            query_vector, top_k=recall_k, workspace_id=self.workspace_id
+        )
+        debug["vector_results"] = self._rows_to_dicts(vector_rows)
+
+        # 3. 混合检索
+        if not settings.HYBRID_SEARCH:
+            results = self._to_results(vector_rows)
+        else:
+            keyword_rows = await self.vector_store.keyword_search(
+                query, top_k=recall_k, workspace_id=self.workspace_id
+            )
+            debug["keyword_results"] = self._rows_to_dicts(keyword_rows)
+            merged = rrf_fuse(vector_rows, keyword_rows, top_k=recall_k)
+            debug["merged_results"] = self._rows_to_dicts(merged)
+            results = self._to_results(merged)
+
+        # 4. 精排
+        if settings.RERANK_ENABLED and results:
+            reranker = self._build_reranker()
+            reranked = await reranker.rerank(query, results)
+            debug["rerank_results"] = [self._result_to_dict(r) for r in reranked]
+            results = reranked[: self.top_k]
+
+        debug["final_results"] = [self._result_to_dict(r) for r in results]
+        return debug
+
+    @staticmethod
+    def _rows_to_dicts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """把 vector_store 的 dict 行转统一 debug 格式。"""
+        return [
+            {
+                "chunk_id": row["chunk_id"],
+                "text": row["text"],
+                "score": row["score"],
+                "title": (row.get("metadata") or {}).get("title", ""),
+                "full_path": (row.get("metadata") or {}).get("full_path", ""),
+                "storage_key": (row.get("metadata") or {}).get("storage_key", ""),
+                "file_id": (row.get("metadata") or {}).get("file_id"),
+                "chunk_index": (row.get("metadata") or {}).get("chunk_index"),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _result_to_dict(result: RetrievalResult) -> dict[str, Any]:
+        """把 RetrievalResult 转统一 debug 格式。"""
+        meta = result.metadata or {}
+        return {
+            "chunk_id": result.chunk_id,
+            "text": result.text,
+            "score": result.score,
+            "title": meta.get("title", ""),
+            "full_path": meta.get("full_path", ""),
+            "storage_key": meta.get("storage_key", ""),
+            "file_id": meta.get("file_id"),
+            "chunk_index": meta.get("chunk_index"),
+        }
+
     def _build_reranker(self) -> Reranker:
         """Build the reranker instance; defaults to OpenAI-compatible /rerank."""
         return OpenAIReranker()

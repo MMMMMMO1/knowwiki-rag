@@ -7,12 +7,16 @@ RAG API 路由 —— 暴露索引链路。
 这里不再提供旁路 /chat/rag/stream，避免双协议维护。
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import models
 from app.core.database import get_db
-from app.core.security import verify_admin_token
+from app.core.security import require_roles, verify_admin_token
 from rag.ingest_service import IngestService
 
 router = APIRouter(tags=["rag"])
@@ -29,6 +33,13 @@ class IngestResponse(BaseModel):
     file_id: int | None
     title: str
     status: str
+
+
+class DebugRequest(BaseModel):
+    question: str
+    session_id: str
+    workspace_id: Optional[str] = None
+    chat_history: Optional[list[dict[str, str]]] = None
 
 
 # ── 索引路由 ──────────────────────────────────────────────
@@ -63,6 +74,39 @@ async def rag_ingest(
         file_id=doc.file_id,
         title=doc.title,
         status="failed" if not queued else doc.status,
+    )
+
+
+@router.post("/rag/debug")
+async def rag_debug(
+    body: DebugRequest,
+    current_user: models.User = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """RAG 检索链路 debug：返回各阶段中间结果，仅 admin 可用。"""
+    from rag.chat_service import ChatService
+
+    # 未显式传历史时，从 ChatLog 取同会话最近历史
+    chat_history = body.chat_history
+    if chat_history is None:
+        history_result = await db.execute(
+            select(models.ChatLog)
+            .where(models.ChatLog.session_id == body.session_id)
+            .order_by(models.ChatLog.created_at.desc())
+            .limit(10)
+        )
+        logs = list(history_result.scalars().all())
+        logs.reverse()
+        chat_history = [{"role": log.role, "content": log.content} for log in logs]
+
+    workspace_id = body.workspace_id or "default"
+    service = ChatService()
+    return await service.debug(
+        question=body.question,
+        db=db,
+        chat_history=chat_history,
+        workspace_id=workspace_id,
+        user_id=current_user.id,
     )
 
 

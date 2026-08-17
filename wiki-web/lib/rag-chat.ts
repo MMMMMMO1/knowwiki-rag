@@ -1,5 +1,17 @@
 import { buildAuthHeaders } from '@/lib/auth-token';
 
+/** 后端 SSE 完成事件返回的单条检索来源。 */
+export type ChatSource = {
+    chunk_id: string;
+    text: string;
+    score: number;
+    title: string;
+    file_id?: number | null;
+    full_path?: string;
+    storage_key?: string;
+    chunk_index?: number | null;
+};
+
 export type ChatConfig = {
     assistantName: string;
     greeting: string;
@@ -30,7 +42,7 @@ export type ChatMessage = {
     role: 'user' | 'assistant';
     content: string;
     sentAt?: number;
-    sources?: unknown[];
+    sources?: ChatSource[];
     error?: string | boolean | null;
     errorMsg?: string | null;
     pending?: boolean;
@@ -49,7 +61,7 @@ type ChatHistoryItem = {
     role: 'user' | 'assistant' | string;
     content: string;
     sentAt?: number;
-    sources?: unknown[];
+    sources?: ChatSource[];
     error?: string | boolean | null;
     errorMsg?: string | null;
 };
@@ -59,7 +71,7 @@ export type StreamEvent = {
     id?: string;
     type?: 'textResponseChunk' | 'textResponse' | 'abort' | string;
     textResponse?: string | null;
-    sources?: unknown[];
+    sources?: ChatSource[];
     close?: boolean;
     error?: string | boolean | null;
     errorMsg?: string | null;

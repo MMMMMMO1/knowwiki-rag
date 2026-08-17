@@ -1,11 +1,13 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { Alert, Button, Empty, Input, Spin, Tooltip } from 'antd';
 import { BulbOutlined, DeleteOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
     ChatMessage,
+    ChatSource,
     RagConfigStatus,
     StreamEvent,
     createChatConfig,
@@ -381,6 +383,9 @@ function ChatMessageBubble({ message }: { message: ChatMessage }) {
                         <ReactMarkdown>
                             {visibleContent}
                         </ReactMarkdown>
+                        {!isUser && message.sources && message.sources.length > 0 && (
+                            <SourceCitations sources={message.sources} />
+                        )}
                         {!isUser && recommendationContent.recommendations.length > 0 && (
                             <LearningRecommendationCards items={recommendationContent.recommendations} />
                         )}
@@ -389,6 +394,57 @@ function ChatMessageBubble({ message }: { message: ChatMessage }) {
             </div>
         </div>
     );
+}
+
+function SourceCitations({ sources }: { sources: ChatSource[] }) {
+    return (
+        <div className="wiki-chat-sources" aria-label="参考来源">
+            <div className="wiki-chat-sources__heading">参考来源</div>
+            <ol className="wiki-chat-sources__list">
+                {sources.map((source, index) => {
+                    const wikiHref = buildWikiHref(source.full_path);
+                    const label = source.title || source.full_path || `来源 ${index + 1}`;
+                    const score = typeof source.score === 'number' ? source.score : 0;
+                    return (
+                        <li
+                            key={source.chunk_id || `${source.title}-${index}`}
+                            className="wiki-chat-sources__item"
+                        >
+                            <div className="wiki-chat-sources__meta">
+                                {wikiHref ? (
+                                    <Link href={wikiHref} className="wiki-chat-sources__title">
+                                        {label}
+                                    </Link>
+                                ) : (
+                                    <span className="wiki-chat-sources__title">{label}</span>
+                                )}
+                                {source.full_path && (
+                                    <span className="wiki-chat-sources__path">{source.full_path}</span>
+                                )}
+                                <span className="wiki-chat-sources__score">
+                                    相关度 {score.toFixed(4)}
+                                    {typeof source.chunk_index === 'number' ? ` · 片段 #${source.chunk_index}` : ''}
+                                </span>
+                            </div>
+                            <p className="wiki-chat-sources__text">{source.text}</p>
+                        </li>
+                    );
+                })}
+            </ol>
+        </div>
+    );
+}
+
+function buildWikiHref(fullPath?: string): string | null {
+    if (!fullPath) {
+        return null;
+    }
+    const encoded = fullPath
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+    return `/wiki/${encoded}`;
 }
 
 function LearningRecommendationCards({ items }: { items: LearningRecommendation[] }) {
