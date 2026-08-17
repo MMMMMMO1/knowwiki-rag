@@ -35,6 +35,19 @@ def _resolve_chat_overrides(
     return None, None, None
 
 
+def _resolve_workspace_id(
+    request: ChatStreamRequest,
+    current_user: models.User,
+) -> str:
+    """仅 admin 可指定 workspace_id；普通用户一律使用默认工作区。
+
+    当前尚无用户-工作区绑定表，采用最小安全策略：非 admin 固定返回 "default"。
+    """
+    if current_user.role == "admin":
+        return request.workspace_id or "default"
+    return "default"
+
+
 @router.post("/stream")
 async def chat_stream(
     request: ChatStreamRequest,
@@ -66,8 +79,8 @@ async def chat_stream(
         for log in recent_logs
     ]
 
-    # 命名空间：请求未指定时回退默认工作区，向后兼容
-    workspace_id = request.workspace_id or "default"
+    # 命名空间：仅 admin 可指定；普通用户一律使用默认工作区，防止越权访问其他知识域
+    workspace_id = _resolve_workspace_id(request, current_user)
 
     # 权限：仅 admin 可覆盖 prompt/model/temperature；普通用户一律使用服务端配置，
     # 防止前端伪造参数绕过成本控制或安全策略。

@@ -185,8 +185,9 @@ async def init_db():
         await _apply_hybrid_search_migration(conn)
         # 幂等迁移：补齐 workspace 命名空间列
         await _apply_workspace_memory_migration(conn)
-        # 幂等迁移：创建 embedding 列的 HNSW 向量索引
-        await _apply_vector_index_migration(conn)
+        # 幂等迁移：创建 embedding 列的 HNSW 向量索引（仅显式开启时执行，避免大表阻塞启动）
+        if settings.AUTO_APPLY_VECTOR_INDEXES:
+            await _apply_vector_index_migration(conn)
     print("Database tables initialized.")
 
     # Seed default admin user if no users exist

@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     # Explicit "remember" phrases that force a memory to be kept (importance=1.0).
     MEMORY_EXPLICIT_KEYWORDS: list[str] = ["记住", "别忘了", "请记住"]
 
+    # Whether to auto-apply HNSW vector indexes at startup.
+    # Building HNSW on an existing large table can block startup for a long time;
+    # keep False in production and run migrations/0004_add_vector_indexes.sql
+    # manually during a low-traffic window instead.
+    AUTO_APPLY_VECTOR_INDEXES: bool = False
+
     # Redis / Celery 消息队列设置（RAG 入库任务调度）
     REDIS_URL: str = "redis://redis:6379/0"
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
