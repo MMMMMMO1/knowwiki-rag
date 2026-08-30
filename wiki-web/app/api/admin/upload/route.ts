@@ -47,6 +47,11 @@ export async function POST(request: NextRequest) {
             wikiFormData.append('folder_id', folderId);
         }
 
+        const overwrite = formData.get('overwrite');
+        if (overwrite !== null) {
+            wikiFormData.append('overwrite', overwrite.toString());
+        }
+
         const wikiResponse = await fetch(`${WIKI_API_URL.replace(/\/$/, '')}/api/v1/admin/upload`, {
             method: 'POST',
             headers: {
