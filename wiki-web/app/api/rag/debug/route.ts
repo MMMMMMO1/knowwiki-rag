@@ -5,17 +5,20 @@ const API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_API_URL |
 export async function POST(request: NextRequest) {
     try {
         const authHeader = request.headers.get('Authorization');
-        const force = request.nextUrl.searchParams.get('force');
-        const query = force === null ? '' : `?force=${encodeURIComponent(force)}`;
-        const response = await fetch(`${API_URL}/api/v1/admin/knowledge/rebuild${query}`, {
+        const body = await request.json();
+        const response = await fetch(`${API_URL}/api/v1/rag/debug`, {
             method: 'POST',
-            headers: { 'Authorization': authHeader || '' },
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: authHeader || '',
+            },
+            body: JSON.stringify(body),
             signal: request.signal,
         });
         const data = await response.json();
         return NextResponse.json(data, { status: response.status });
     } catch (error) {
-        console.error('Knowledge rebuild proxy failed:', error);
+        console.error('RAG debug proxy failed:', error);
         return NextResponse.json({ success: false, detail: 'Connection error' }, { status: 500 });
     }
 }

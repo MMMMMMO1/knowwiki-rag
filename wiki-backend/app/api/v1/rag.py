@@ -26,6 +26,7 @@ router = APIRouter(tags=["rag"])
 
 class IngestRequest(BaseModel):
     file_id: int
+    workspace_id: str = "default"
 
 
 class IngestResponse(BaseModel):
@@ -48,24 +49,28 @@ class DebugRequest(BaseModel):
 async def rag_ingest(
     body: IngestRequest,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_admin_token),
+    current_user: models.User = Depends(verify_admin_token),
 ):
     """提交 Wiki 文件到 RAG 入库队列。
 
     创建或重置 RagDocument 记录，然后投递 Celery 任务，立即返回。
     实际处理由 rag-worker 在后台完成。
     """
+    workspace_id = body.workspace_id.strip() or "default"
+    if workspace_id != "default" and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可以选择非默认工作区")
     try:
         service = IngestService(db)
-        doc = await service.ingest(file_id=body.file_id)
+        doc = await service.ingest(file_id=body.file_id, workspace_id=workspace_id)
         await db.commit()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
     # 投递 Celery 任务
     from rag.tasks import enqueue_rag_document_task
-    queued = enqueue_rag_document_task(doc.id)
-    if not queued:
+    enqueue_required = doc.status == "pending"
+    queued = enqueue_rag_document_task(doc.id) if enqueue_required else True
+    if enqueue_required and not queued:
         from rag.task_worker import mark_rag_document_failed
         await mark_rag_document_failed(doc.id, "Celery 任务投递失败（Redis 不可用）")
 

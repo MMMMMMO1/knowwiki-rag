@@ -1,5 +1,9 @@
 import time
+import asyncio
 import pytest
+from fastapi import HTTPException
+from app.models import User
+from app.core.config import Settings
 from app.core.security import (
     get_password_hash,
     verify_password,
@@ -7,6 +11,7 @@ from app.core.security import (
     base64url_decode,
     create_access_token,
     decode_access_token,
+    require_roles,
 )
 
 
@@ -75,3 +80,43 @@ def test_jwt_expiration() -> None:
     
     with pytest.raises(ValueError, match="Token expired"):
         decode_access_token(token)
+
+
+def _security_settings(**overrides) -> Settings:
+    values = {
+        "DB_PASSWORD": "database-secret",
+        "S3_ACCESS_KEY": "storage-user",
+        "S3_SECRET_KEY": "storage-secret",
+        "JWT_SECRET": "a-secure-jwt-secret-that-is-long-enough",
+        "ADMIN_PASSWORD": "a-secure-admin-password",
+        "CORS_ORIGINS": ["https://wiki.example.com"],
+    }
+    values.update(overrides)
+    return Settings(_env_file=None, **values)
+
+
+def test_runtime_security_rejects_missing_credentials() -> None:
+    config = _security_settings(DB_PASSWORD="")
+    with pytest.raises(RuntimeError, match="DB_PASSWORD"):
+        config.validate_runtime_security()
+
+
+def test_runtime_security_rejects_production_defaults() -> None:
+    config = _security_settings(
+        ENVIRONMENT="production",
+        ADMIN_PASSWORD="admin123",
+    )
+    with pytest.raises(RuntimeError, match="默认或占位凭证"):
+        config.validate_runtime_security()
+
+
+def test_runtime_security_accepts_strong_production_configuration() -> None:
+    _security_settings(ENVIRONMENT="production").validate_runtime_security()
+
+
+def test_admin_only_dependency_rejects_editor() -> None:
+    dependency = require_roles("admin")
+    editor = User(id=2, username="editor", role="editor", is_active=True)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(dependency(editor))
+    assert exc_info.value.status_code == 403

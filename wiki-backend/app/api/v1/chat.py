@@ -1,4 +1,5 @@
 import json
+import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.core.security import get_current_user
 from app import models
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 class ChatStreamRequest(BaseModel):
@@ -118,17 +120,16 @@ async def chat_stream(
                 accumulated.append(token)
                 yield f"data: {json.dumps({'type': 'textResponseChunk', 'textResponse': token, 'sources': [], 'close': False})}\n\n"
 
-            # 完成事件（附带 sources）
             full_text = "".join(accumulated)
-            yield f"data: {json.dumps({'type': 'textResponse', 'textResponse': full_text, 'sources': service.last_sources, 'close': True})}\n\n"
-
-            # 3. 记录助手回复
+            # 3. 先持久化助手回复和来源，再向客户端发送完成事件；这样客户端收到
+            # close=True 就表示该回答已经能从历史记录中稳定恢复。
             if full_text.strip():
                 assistant_msg = models.ChatLog(
                     user_id=current_user.id,
                     session_id=request.session_id,
                     role="assistant",
                     content=full_text,
+                    sources=service.last_sources,
                 )
                 db.add(assistant_msg)
                 await db.commit()
@@ -145,8 +146,14 @@ async def chat_stream(
                         assistant_message=full_text,
                     )
 
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'abort', 'textResponse': None, 'sources': [], 'close': True, 'error': str(e)})}\n\n"
+            # 完成事件（附带 sources）
+            yield f"data: {json.dumps({'type': 'textResponse', 'textResponse': full_text, 'sources': service.last_sources, 'close': True})}\n\n"
+
+        except Exception as exc:
+            from rag.task_worker import sanitize_error_message
+
+            logger.error("RAG chat stream failed: %s", sanitize_error_message(str(exc)))
+            yield f"data: {json.dumps({'type': 'abort', 'textResponse': None, 'sources': [], 'close': True, 'error': '知识库服务暂时不可用，请稍后重试。'})}\n\n"
 
     return StreamingResponse(
         rag_event_stream(),
@@ -176,7 +183,8 @@ async def get_chat_history(
         history.append({
             "role": log.role,
             "content": log.content,
-            "sentAt": int(log.created_at.timestamp())
+            "sentAt": int(log.created_at.timestamp()),
+            "sources": log.sources or [],
         })
 
     return {"history": history}

@@ -145,7 +145,7 @@ services:
     environment:
       # 说明：数据库仅供 Docker 内部服务访问，不再映射到宿主机端口。
       - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-duhakeer}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
       - POSTGRES_DB=${DB_NAME:-postgres}
       - PGDATA=/var/lib/postgresql/data/pgdata
     command: >
@@ -182,8 +182,8 @@ services:
       - RUSTFS_CONSOLE_ENABLE=true
       - RUSTFS_CORS_ALLOWED_ORIGINS=*
       - RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS=*
-      - RUSTFS_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
-      - RUSTFS_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - RUSTFS_ACCESS_KEY=${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      - RUSTFS_SECRET_KEY=${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
       - RUSTFS_OBS_LOGGER_LEVEL=info
       # 说明：如果不需要启用 RustFS 原生 TLS，请注释掉此行。启用时需挂载证书目录到容器的 /opt/tls。
       # - RUSTFS_TLS_PATH=/opt/tls

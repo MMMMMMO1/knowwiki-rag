@@ -1,0 +1,14 @@
+[
+  {
+    "question": "什么是 RAG？",
+    "expected_files": ["rag.md"],
+    "expected_keywords": ["检索", "增强"],
+    "must_include": ["检索增强生成"]
+  },
+  {
+    "question": "如何评估检索质量？",
+    "expected_files": ["evaluation.md"],
+    "expected_keywords": ["召回", "命中率"],
+    "must_include": ["评估"]
+  }
+]

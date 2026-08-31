@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastA
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import verify_admin_token
+from app.core.security import require_roles, verify_admin_token
 from app.crud import get_folder_by_id, get_file_by_id, get_file_by_full_path, get_folder_by_full_path, create_file, delete_folder, delete_file_record, create_folder
 from app.scanner import normalize_slug, normalize_title, extract_sort_order
 from sqlalchemy import select, func, desc
@@ -107,7 +107,8 @@ async def upload_file(
     file: UploadFile = FastAPIFile(...),
     folder_id: int | None = Form(None),
     overwrite: bool = Form(False),
-    _: str = Depends(verify_admin_token),
+    workspace_id: str = Form("default"),
+    current_user: User = Depends(verify_admin_token),
     db: AsyncSession = Depends(get_db),
 ) -> UploadResponse:
     """
@@ -123,6 +124,9 @@ async def upload_file(
     The file will be saved to S3 and a file record will be created.
     Knowledge sync is scheduled asynchronously after the Wiki write succeeds.
     """
+    workspace_id = workspace_id.strip() or "default"
+    if workspace_id != "default" and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可以选择非默认工作区")
     # Allowed file extensions
     ALLOWED_EXTENSIONS = {".md", ".html", ".docx", ".txt", ".pdf"}
     
@@ -208,14 +212,19 @@ async def upload_file(
     # 创建或重置 RAG 索引记录（幂等，不执行实际解析/向量化）
     from rag.ingest_service import IngestService
     rag_service = IngestService(db)
-    rag_doc = await rag_service.ingest(file_id=file_node.id)
+    rag_doc = await rag_service.ingest(file_id=file_node.id, workspace_id=workspace_id)
 
     await db.commit()
 
     # 投递 Celery 入库任务到 Redis，由 rag-worker 异步消费
     from rag.tasks import enqueue_rag_document_task
-    queued = enqueue_rag_document_task(rag_doc.id)
-    if queued:
+    enqueue_required = rag_doc.status == "pending"
+    queued = enqueue_rag_document_task(rag_doc.id) if enqueue_required else True
+    if not enqueue_required:
+        upload_message = (
+            "文件已覆盖；当前索引任务完成后会自动处理最新版本。"
+        )
+    elif queued:
         upload_message = (
             "File overwritten and RAG indexing task queued."
             if overwrite
@@ -391,6 +400,7 @@ async def rag_knowledge_sync(
         doc.error_message = None
         doc.queued_at = now
         doc.processing_started_at = None
+        doc.processing_generation = None
         doc.completed_at = None
         doc.failed_at = None
         doc.retry_count = 0  # 手动重试时清零
@@ -438,10 +448,10 @@ async def rag_knowledge_rebuild(
     force=True（强制全量重建，用于 metadata/schema 规则升级）：
     - completed/skipped/failed/pending 全部重置为 pending 并重新投递（requeued）
 
-    两种模式下 processing 都跳过（skipped_processing），避免打断正在处理的 worker。
+    force=True 遇到 processing 时只登记更新 generation；当前 worker 会安全回滚旧版本，
+    随后自动投递最新版本，不会并发写 chunks。
     投递失败：标记 failed 并计入 failed_enqueue。
     """
-    from datetime import datetime, timezone
     from app.models import File, RagDocument
     from rag.ingest_service import IngestService
     from rag.tasks import enqueue_rag_document_task
@@ -463,17 +473,7 @@ async def rag_knowledge_rebuild(
     skipped_processing = 0
     to_enqueue: list[int] = []
 
-    now = datetime.now(timezone.utc)
     ingest = IngestService(db)
-
-    def _reset_pending(doc: RagDocument) -> None:
-        doc.status = "pending"
-        doc.error_message = None
-        doc.queued_at = now
-        doc.processing_started_at = None
-        doc.completed_at = None
-        doc.failed_at = None
-        doc.retry_count = 0
 
     for file in files:
         doc = docs_by_file_id.get(file.id)
@@ -482,18 +482,19 @@ async def rag_knowledge_rebuild(
             new_doc = await ingest.ingest(file.id)
             to_enqueue.append(new_doc.id)
             created += 1
+        elif doc.status == "processing" and force:
+            # 只递增 generation，不改写 processing；当前 worker 会发现版本过期并重投。
+            await ingest.ingest(file.id, workspace_id=doc.workspace_id)
+            skipped_processing += 1
         elif doc.status == "processing":
-            # processing 正在被 worker 处理：两种模式都跳过，保护并发
             skipped_processing += 1
         elif force:
-            # 强制重建：completed/skipped/failed/pending 全部重置重新入队
-            _reset_pending(doc)
-            to_enqueue.append(doc.id)
+            refreshed = await ingest.ingest(file.id, workspace_id=doc.workspace_id)
+            to_enqueue.append(refreshed.id)
             requeued += 1
         elif doc.status in ("failed", "pending"):
-            # 默认：重置 failed/pending 重新入队
-            _reset_pending(doc)
-            to_enqueue.append(doc.id)
+            refreshed = await ingest.ingest(file.id, workspace_id=doc.workspace_id)
+            to_enqueue.append(refreshed.id)
             requeued += 1
         else:
             # 默认：completed / skipped 不重复处理
@@ -565,6 +566,7 @@ async def rag_knowledge_files(
             "rag_completed_at": doc.completed_at.isoformat() if doc and doc.completed_at else None,
             "rag_failed_at": doc.failed_at.isoformat() if doc and doc.failed_at else None,
             "rag_error_message": doc.error_message if doc else None,
+            "workspace_id": doc.workspace_id if doc else "default",
         })
 
     return {"success": True, "files": items}
@@ -588,8 +590,9 @@ async def rag_rebuild_file(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    queued = enqueue_rag_document_task(doc.id)
-    if not queued:
+    enqueue_required = doc.status == "pending"
+    queued = enqueue_rag_document_task(doc.id) if enqueue_required else True
+    if enqueue_required and not queued:
         await mark_rag_document_failed(doc.id, "Celery 任务投递失败（Redis 不可用）")
         raise HTTPException(
             status_code=500,
@@ -598,7 +601,11 @@ async def rag_rebuild_file(
 
     return {
         "success": True,
-        "message": f"Rebuild queued for file {file_id}.",
+        "message": (
+            f"Rebuild queued for file {file_id}."
+            if enqueue_required
+            else f"Rebuild recorded for file {file_id}; latest generation will run next."
+        ),
         "file_id": file_id,
         "rag_document_id": doc.id,
         "status": doc.status,
@@ -650,7 +657,7 @@ async def get_dashboard_stats(
 
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
-    _: str = Depends(verify_admin_token),
+    _: User = Depends(require_roles("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserResponse]:
     """列出系统中的所有用户账户。"""
@@ -662,7 +669,7 @@ async def list_users(
 @router.post("/users", response_model=UserResponse)
 async def create_user(
     request: CreateUserAdminRequest,
-    _: str = Depends(verify_admin_token),
+    _: User = Depends(require_roles("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """管理员创建一个新用户账户。"""
@@ -689,7 +696,7 @@ async def create_user(
 async def update_user(
     user_id: int,
     request: UpdateUserAdminRequest,
-    _: str = Depends(verify_admin_token),
+    _: User = Depends(require_roles("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """管理员更新某个用户账户（更新密码、角色、或禁用启用状态）。"""
@@ -713,7 +720,7 @@ async def update_user(
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: int,
-    _: str = Depends(verify_admin_token),
+    _: User = Depends(require_roles("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """管理员删除某个用户账户。"""
@@ -731,7 +738,7 @@ async def delete_user(
 
 @router.get("/chat-sessions", response_model=list[ChatSessionAudit])
 async def list_chat_sessions(
-    _: str = Depends(verify_admin_token),
+    _: User = Depends(require_roles("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> list[ChatSessionAudit]:
     """
@@ -770,7 +777,7 @@ async def list_chat_sessions(
 @router.get("/chat-sessions/{session_id}/messages", response_model=list[ChatMessageAudit])
 async def get_session_messages(
     session_id: str,
-    _: str = Depends(verify_admin_token),
+    _: User = Depends(require_roles("admin")),
     db: AsyncSession = Depends(get_db),
 ) -> list[ChatMessageAudit]:
     """
@@ -788,6 +795,7 @@ async def get_session_messages(
             id=log.id,
             role=log.role,
             content=log.content,
+            sources=log.sources or [],
             created_at=log.created_at,
         )
         for log in logs

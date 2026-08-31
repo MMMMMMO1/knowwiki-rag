@@ -86,7 +86,7 @@ def test_knowledge_rebuild_creates_and_requeues() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return fake_new_doc
 
     fake_db = FakeDB()

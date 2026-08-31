@@ -81,3 +81,35 @@ def test_chat_service_passes_history_to_prompt_builder() -> None:
 
     tokens = asyncio.run(run())
     assert tokens == ["ok"]
+
+
+def test_chat_service_memory_failure_degrades_gracefully() -> None:
+    """长期记忆召回异常时仍使用知识库结果完成回答。"""
+    from rag.chat_service import ChatService
+
+    async def run():
+        service = ChatService()
+        fake_result = MagicMock(
+            chunk_id="c1",
+            text="knowledge",
+            score=0.9,
+            metadata={"title": "doc.md", "full_path": "doc.md", "chunk_index": 0},
+        )
+
+        with patch("rag.chat_service.Retriever") as MockRetriever, \
+                patch("rag.chat_service.VectorStore"), \
+                patch("rag.chat_service.Embedder"), \
+                patch("rag.chat_service.LLM") as MockLLM, \
+                patch("rag.chat_service.settings.MEMORY_ENABLED", True), \
+                patch.object(service, "_recall_memories", new=AsyncMock(side_effect=RuntimeError("memory down"))):
+            retriever = MockRetriever.return_value
+            retriever.retrieve = AsyncMock(return_value=[fake_result])
+            retriever.format_context = MagicMock(return_value="ctx")
+
+            async def fake_stream(messages, temperature=None):
+                yield "ok"
+
+            MockLLM.return_value.chat_stream = fake_stream
+            return [token async for token in service.ask_stream("q", db=None, user_id=1)]
+
+    assert asyncio.run(run()) == ["ok"]

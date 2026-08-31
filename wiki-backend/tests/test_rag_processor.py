@@ -13,7 +13,15 @@ from app.models import RagDocument
 
 
 def _make_doc(status: str = "pending") -> RagDocument:
-    doc = RagDocument(id=1, file_id=10, doc_id="uuid", title="test", status=status)
+    doc = RagDocument(
+        id=1,
+        file_id=10,
+        doc_id="uuid",
+        title="test",
+        status=status,
+        generation=1,
+        processing_generation=1 if status == "processing" else None,
+    )
     doc.id = 1
     return doc
 
@@ -24,6 +32,8 @@ class _FakeResult:
 
     def scalar_one_or_none(self):
         return self._item
+
+    rowcount = 0
 
 
 class _FakeSession:
@@ -69,7 +79,7 @@ def test_sanitize_error_message_redacts_keys() -> None:
 
 def _claim_true(self, rag_document_id):
     async def _inner():
-        return True
+        return 1
     return _inner()
 
 
@@ -77,8 +87,10 @@ def test_processor_success_marks_completed() -> None:
     doc = _make_doc(status="processing")
     ctx, session = _patch_pipeline_session(doc)
 
-    async def fake_pipeline(self, db, d):
+    async def fake_pipeline(self, db, d, generation):
         d.chunk_count = 5
+        d.status = "completed"
+        return True
 
     with ctx, \
             patch.object(RagIndexingProcessor, "_claim_processing", _claim_true), \
@@ -98,7 +110,7 @@ def test_processor_skips_when_claim_fails() -> None:
     ctx, _ = _patch_pipeline_session(doc)
 
     async def claim_false(self, rag_document_id):
-        return False
+        return None
 
     with ctx, patch.object(RagIndexingProcessor, "_claim_processing", claim_false):
         processor = RagIndexingProcessor()
@@ -112,7 +124,7 @@ def test_processor_failure_marks_failed_and_reraises() -> None:
     doc = _make_doc(status="processing")
     ctx, _ = _patch_pipeline_session(doc)
 
-    async def fake_pipeline(self, db, d):
+    async def fake_pipeline(self, db, d, generation):
         raise ValueError("文档内容为空，无法索引")
 
     with ctx, \
@@ -129,7 +141,7 @@ def test_processor_failure_marks_failed_and_reraises() -> None:
     mark_failed.assert_awaited_once()
     # 错误信息经过脱敏，且 retryable=False
     args = mark_failed.await_args.args
-    assert "文档内容为空" in args[1]
+    assert "文档内容为空" in args[2]
     assert mark_failed.await_args.kwargs.get("retryable") is False
 
 
@@ -138,7 +150,7 @@ def test_processor_retryable_error_reraises_retryable() -> None:
     doc = _make_doc(status="processing")
     ctx, _ = _patch_pipeline_session(doc)
 
-    async def fake_pipeline(self, db, d):
+    async def fake_pipeline(self, db, d, generation):
         raise RetryableIndexingError("S3 文件为空或不存在")
 
     with ctx, \
@@ -188,7 +200,7 @@ def test_processor_skip_error_marks_skipped_and_returns_skipped() -> None:
     doc = _make_doc(status="processing")
     ctx, _ = _patch_pipeline_session(doc)
 
-    async def fake_pipeline(self, db, d):
+    async def fake_pipeline(self, db, d, generation):
         raise SkipIndexingError("Wiki 文件已被删除: file_id=10")
 
     with ctx, \
@@ -231,6 +243,7 @@ def test_finalize_failed_overwrites_message_without_incrementing_retry() -> None
     assert "将自动重试" not in sql
     # finalize_failed 不写 retry_count，避免与 process() 里的 +1 双重累加
     assert "retry_count" not in sql
+    assert "rag_documents.status = 'failed'" in sql
 
 
 class _FakeStaleResult:

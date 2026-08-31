@@ -47,12 +47,23 @@ export async function POST(request: NextRequest) {
             wikiFormData.append('folder_id', folderId);
         }
 
+        const overwrite = getTextField(formData, 'overwrite');
+        if (overwrite) {
+            wikiFormData.append('overwrite', overwrite);
+        }
+
+        const workspaceId = getTextField(formData, 'workspace_id');
+        if (workspaceId) {
+            wikiFormData.append('workspace_id', workspaceId);
+        }
+
         const wikiResponse = await fetch(`${WIKI_API_URL.replace(/\/$/, '')}/api/v1/admin/upload`, {
             method: 'POST',
             headers: {
                 Authorization: authHeader || '',
             },
             body: wikiFormData,
+            signal: request.signal,
         });
 
         const wikiData = await readResponseBody(wikiResponse);

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,9 @@ from rag.llm import LLM
 from rag.prompt_builder import PromptBuilder
 from rag.retriever import Retriever
 from rag.vector_store import VectorStore
+
+
+logger = logging.getLogger(__name__)
 
 
 # Prompt for rewriting a multi-turn follow-up into a standalone retrieval question.
@@ -78,15 +82,21 @@ class ChatService:
             yield "抱歉，知识库中没有找到相关信息。"
             return
 
-        # 记录 sources（含完整溯源 metadata）
+        # 记录前端需要的公开来源字段；内部 storage_key 不进入普通用户响应。
         self.last_sources = self._build_sources(results)
 
         # 2. Recall long-term memories (kept separate from documents)
         memory_texts: list[str] = []
         if settings.MEMORY_ENABLED and user_id is not None:
-            memory_texts = await self._recall_memories(
-                db, user_id, workspace_id, retrieval_query
-            )
+            try:
+                memory_texts = await self._recall_memories(
+                    db, user_id, workspace_id, retrieval_query
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Memory recall unavailable; continuing without memory: %s",
+                    type(exc).__name__,
+                )
 
         # 3. Build prompt (documents + memories in separate sections)
         context = self._build_context(retriever, results, memory_texts)
@@ -146,9 +156,15 @@ class ChatService:
 
         memory_texts: list[str] = []
         if settings.MEMORY_ENABLED and user_id is not None:
-            memory_texts = await self._recall_memories(
-                db, user_id, workspace_id, retrieval_query
-            )
+            try:
+                memory_texts = await self._recall_memories(
+                    db, user_id, workspace_id, retrieval_query
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Memory recall unavailable; continuing without memory: %s",
+                    type(exc).__name__,
+                )
 
         context = self._build_context(retriever, results, memory_texts)
         builder = PromptBuilder(system_prompt=prompt)
@@ -182,9 +198,15 @@ class ChatService:
         # 记忆召回（与检索一致，使用 retrieval_query）
         memory_texts: list[str] = []
         if settings.MEMORY_ENABLED and user_id is not None:
-            memory_texts = await self._recall_memories(
-                db, user_id, workspace_id, retrieval_query
-            )
+            try:
+                memory_texts = await self._recall_memories(
+                    db, user_id, workspace_id, retrieval_query
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Memory recall unavailable; continuing without memory: %s",
+                    type(exc).__name__,
+                )
 
         # 组装 prompt（不调用 LLM，只返回 messages 供排查）
         results = self._dicts_to_results(retrieval["final_results"])
@@ -265,7 +287,7 @@ class ChatService:
             return question
 
     def _build_sources(self, results: list) -> list[dict]:
-        """把检索结果组装为前端 sources（含完整溯源 metadata）。"""
+        """把检索结果组装为前端 sources，仅包含可公开的引用信息。"""
         return [
             {
                 "chunk_id": r.chunk_id,
@@ -274,7 +296,6 @@ class ChatService:
                 "title": r.metadata.get("title", ""),
                 "file_id": r.metadata.get("file_id"),
                 "full_path": r.metadata.get("full_path", ""),
-                "storage_key": r.metadata.get("storage_key", ""),
                 "chunk_index": r.metadata.get("chunk_index"),
             }
             for r in results

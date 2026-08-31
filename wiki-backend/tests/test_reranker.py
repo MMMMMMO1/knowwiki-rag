@@ -134,3 +134,30 @@ def test_retriever_rerank_enabled_recalls_more_and_truncates() -> None:
         assert results[0].chunk_id == "c19"
 
     asyncio.run(run())
+
+
+def test_retriever_falls_back_when_reranker_fails() -> None:
+    """精排服务异常时保留粗召回结果，聊天链路不失败。"""
+    from rag.retriever import Retriever
+
+    async def run():
+        embedder = MagicMock()
+        embedder.embed = AsyncMock(return_value=[[0.0] * 1024])
+        store = MagicMock()
+        store.search = AsyncMock(return_value=[
+            {"chunk_id": f"c{i}", "text": f"t{i}", "metadata": {}, "score": 0.9 - i / 10}
+            for i in range(4)
+        ])
+        reranker = MagicMock()
+        reranker.rerank = AsyncMock(side_effect=RuntimeError("rerank unavailable"))
+
+        retriever = Retriever(embedder, store, top_k=2)
+        with patch("rag.retriever.settings.HYBRID_SEARCH", False), \
+                patch("rag.retriever.settings.RERANK_ENABLED", True), \
+                patch("rag.retriever.settings.RERANK_CANDIDATE_K", 4), \
+                patch.object(Retriever, "_build_reranker", return_value=reranker):
+            results = await retriever.retrieve("query")
+
+        assert [item.chunk_id for item in results] == ["c0", "c1"]
+
+    asyncio.run(run())

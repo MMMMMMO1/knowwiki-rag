@@ -337,6 +337,8 @@ GET /api/v1/admin/stats
 
 ### 用户管理 / 会话审计
 
+以下接口仅允许 `admin`，`editor` 无权访问：
+
 ```http
 GET    /api/v1/admin/users
 POST   /api/v1/admin/users

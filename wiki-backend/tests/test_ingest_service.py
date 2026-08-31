@@ -39,7 +39,13 @@ def _make_file(file_id: int = 42) -> File:
 
 
 def _make_doc(file_id: int, title: str = "test", status: str = "completed") -> RagDocument:
-    doc = RagDocument(file_id=file_id, doc_id="doc-uuid", title=title, status=status)
+    doc = RagDocument(
+        file_id=file_id,
+        doc_id="doc-uuid",
+        title=title,
+        status=status,
+        generation=1,
+    )
     doc.id = 1
     return doc
 
@@ -48,7 +54,8 @@ def test_ingest_creates_record_when_none_exists() -> None:
     """无历史记录时创建新记录。"""
     file = _make_file()
     db = _make_db([
-        _FakeResult([file]),   # 第一次查询 File
+        _FakeResult([]),       # advisory lock
+        _FakeResult([file]),   # 查询 File
         _FakeResult([]),       # 查询 RagDocument（无记录）
     ])
     service = IngestService(db)
@@ -69,6 +76,7 @@ def test_ingest_is_idempotent_same_file_id() -> None:
     existing.error_message = "old error"
 
     db = _make_db([
+        _FakeResult([]),              # advisory lock
         _FakeResult([file]),          # 查询 File
         _FakeResult([existing]),      # 查询 RagDocument（已有 1 条）
     ])
@@ -79,31 +87,29 @@ def test_ingest_is_idempotent_same_file_id() -> None:
     # 复用原记录，而不是新建
     assert doc is existing
     assert doc.status == "pending"
+    assert doc.generation == 2
     assert doc.error_message is None
     # 未调用 add（没有新建记录）
     db.add.assert_not_called()
 
 
-def test_ingest_cleans_duplicate_records() -> None:
-    """历史遗留的多条重复记录：保留第一条，删除其余。"""
+def test_ingest_does_not_reset_processing_record() -> None:
+    """processing 期间只登记新 generation，不制造第二个并发 worker。"""
     file = _make_file()
-    first = _make_doc(file_id=42, status="completed")
-    first.id = 1
-    dup = _make_doc(file_id=42, status="completed")
-    dup.id = 2
+    existing = _make_doc(file_id=42, status="processing")
+    existing.processing_generation = 1
 
     db = _make_db([
-        _FakeResult([file]),               # 查询 File
-        _FakeResult([first, dup]),         # 查询 RagDocument（2 条重复）
+        _FakeResult([]),
+        _FakeResult([file]),
+        _FakeResult([existing]),
     ])
     service = IngestService(db)
 
     doc = asyncio.run(service.ingest(file_id=42))
 
-    # 保留第一条
-    assert doc is first
-    assert doc.status == "pending"
-    # 删除多余的那条
-    db.delete.assert_called_once_with(dup)
-    # 未新建
+    assert doc is existing
+    assert doc.status == "processing"
+    assert doc.processing_generation == 1
+    assert doc.generation == 2
     db.add.assert_not_called()

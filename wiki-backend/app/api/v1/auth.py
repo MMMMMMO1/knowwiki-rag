@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.database import get_db
 from app.core.security import verify_password, create_access_token, get_current_user
@@ -70,3 +70,67 @@ async def get_me(
         role=current_user.role,
         is_active=current_user.is_active,
     )
+
+
+@router.get("/memories")
+async def list_my_memories(
+    workspace_id: str = "default",
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """列出当前用户自己的长期记忆，不允许跨用户读取。"""
+    result = await db.execute(
+        select(models.Memory)
+        .where(models.Memory.user_id == current_user.id)
+        .where(models.Memory.workspace_id == workspace_id)
+        .order_by(models.Memory.importance.desc(), models.Memory.updated_at.desc())
+        .limit(200)
+    )
+    return {
+        "memories": [
+            {
+                "id": item.id,
+                "content": item.content,
+                "importance": item.importance,
+                "workspace_id": item.workspace_id,
+                "source_session_id": item.source_session_id,
+                "created_at": item.created_at,
+                "updated_at": item.updated_at,
+            }
+            for item in result.scalars().all()
+        ]
+    }
+
+
+@router.delete("/memories/{memory_id}")
+async def delete_my_memory(
+    memory_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """删除当前用户的一条长期记忆。"""
+    result = await db.execute(
+        delete(models.Memory)
+        .where(models.Memory.id == memory_id)
+        .where(models.Memory.user_id == current_user.id)
+    )
+    await db.commit()
+    if not (result.rowcount or 0):
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"success": True}
+
+
+@router.delete("/memories")
+async def clear_my_memories(
+    workspace_id: str = "default",
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """清空当前用户在指定工作区的长期记忆。"""
+    result = await db.execute(
+        delete(models.Memory)
+        .where(models.Memory.user_id == current_user.id)
+        .where(models.Memory.workspace_id == workspace_id)
+    )
+    await db.commit()
+    return {"success": True, "deleted": result.rowcount or 0}

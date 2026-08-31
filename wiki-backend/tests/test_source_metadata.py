@@ -18,8 +18,8 @@ def test_splitter_adds_chunk_index() -> None:
     assert [c.metadata["chunk_index"] for c in chunks] == list(range(len(chunks)))
 
 
-def test_build_sources_includes_full_metadata() -> None:
-    """_build_sources 返回完整溯源字段（title/file_id/full_path/storage_key/chunk_index）。"""
+def test_build_sources_excludes_internal_storage_key() -> None:
+    """普通聊天来源保留公开溯源字段，但不返回内部 storage_key。"""
     from rag.chat_service import ChatService
 
     result = RetrievalResult(
@@ -42,7 +42,6 @@ def test_build_sources_includes_full_metadata() -> None:
         "title": "doc.md",
         "file_id": 42,
         "full_path": "docs/doc.md",
-        "storage_key": "docs/doc.md",
         "chunk_index": 3,
     }
 
@@ -58,7 +57,7 @@ def test_rag_ingest_enqueue_failure_returns_failed() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return doc
 
     class FakeDB:
@@ -72,7 +71,7 @@ def test_rag_ingest_enqueue_failure_returns_failed() -> None:
             return await rag_ingest(
                 IngestRequest(file_id=1),
                 FakeDB(),
-                "dummy-token",
+                type("Admin", (), {"role": "admin"})(),
             )
 
     resp = asyncio.run(run())
@@ -91,7 +90,7 @@ def test_rag_ingest_enqueue_success_returns_pending() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return doc
 
     class FakeDB:
@@ -104,7 +103,7 @@ def test_rag_ingest_enqueue_success_returns_pending() -> None:
             return await rag_ingest(
                 IngestRequest(file_id=2),
                 FakeDB(),
-                "dummy-token",
+                type("Admin", (), {"role": "admin"})(),
             )
 
     resp = asyncio.run(run())
@@ -143,8 +142,12 @@ def test_pipeline_metadata_flows_to_chunks() -> None:
         async def insert(self, document, chunks, vectors):
             captured["chunks"] = chunks
 
+    class FakeUpdateResult:
+        rowcount = 1
+
     class FakeDB:
-        pass
+        async def execute(self, *args, **kwargs):
+            return FakeUpdateResult()
 
     async def run():
         processor = RagIndexingProcessor()
@@ -152,7 +155,8 @@ def test_pipeline_metadata_flows_to_chunks() -> None:
         with patch("rag.task_worker.DocumentLoader", FakeLoader), \
                 patch("rag.task_worker.Embedder", FakeEmbedder), \
                 patch("rag.task_worker.VectorStore", FakeStore):
-            await processor._run_pipeline(FakeDB(), doc)
+            published = await processor._run_pipeline(FakeDB(), doc, 1)
+            assert published is True
 
     asyncio.run(run())
 
@@ -168,8 +172,8 @@ def test_pipeline_metadata_flows_to_chunks() -> None:
         assert c.metadata["storage_key"] == "docs/a.md"
 
 
-def test_ask_populates_last_sources_with_full_metadata() -> None:
-    """ChatService.ask 后 last_sources 从真实 RetrievalResult.metadata 输出完整字段。"""
+def test_ask_populates_last_sources_without_internal_storage_key() -> None:
+    """普通聊天来源包含公开字段，但不泄露内部 storage_key。"""
     from unittest.mock import MagicMock, patch
 
     from rag.chat_service import ChatService
@@ -209,7 +213,7 @@ def test_ask_populates_last_sources_with_full_metadata() -> None:
         assert s["title"] == "a.md"
         assert s["file_id"] == 5
         assert s["full_path"] == "docs/a.md"
-        assert s["storage_key"] == "docs/a.md"
+        assert "storage_key" not in s
         assert s["chunk_index"] == 0
 
     asyncio.run(run())

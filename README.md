@@ -39,7 +39,31 @@ pending → processing → completed
 ```
 
 `rag_documents` 记录 retry_count、chunk_count、content_hash、error_message，
-以及 queued_at / processing_started_at / completed_at / failed_at 等时间戳。
+generation / processing_generation，以及 queued_at / processing_started_at /
+completed_at / failed_at 等时间戳。同一 file_id 只有一条文档记录；覆盖或重建时 generation
+递增，旧 worker 只能发布自己抢占的版本，发现新版本后会退出并重新投递。
+
+检索只读取文件仍存在、状态为 completed 的当前文档，并通过
+`RETRIEVAL_MIN_SCORE` 丢弃低相似度结果。Rerank 或长期记忆服务异常时会降级到基础检索，
+不会阻断主聊天。
+
+## 文件格式范围
+
+管理端上传当前支持 `.md`、`.html`、`.docx`、`.txt`、`.pdf`。底层 MarkItDown
+解析器还具备 PPTX、XLSX、图片、音频、EPUB、CSV 等解析能力，但这些格式尚未纳入上传接口的
+产品支持范围和端到端测试，因此前端不会接受它们。
+
+## RAG 评估
+
+评估模块支持真实 Retriever、外部 JSON 数据集及 Recall@K、MRR、NDCG、关键词覆盖率和
+答案事实覆盖率。配置好后端环境后可运行：
+
+```bash
+cd wiki-backend
+cp rag/eval_dataset.example.json rag/eval_dataset.local.json
+# 将示例问题和期望文件改成当前知识库的真实数据后执行
+uv run python -m rag.eval --dataset rag/eval_dataset.local.json --workspace default --top-k 5
+```
 
 ### 常用排查命令
 
@@ -56,7 +80,7 @@ docker compose logs rag-worker
 
 默认模式只开放 Wiki Web 端口，后端、数据库、Redis、RustFS 均只允许 Docker 内部网络访问。
 
-首次启动前先从根目录模板创建本地配置，并填写 `ADMIN_USERNAME` / `ADMIN_PASSWORD`、数据库密码、S3 密钥、LLM/Embedding API Key 等值：
+首次启动前先从根目录模板创建本地配置，并填写 `ADMIN_USERNAME` / `ADMIN_PASSWORD`、数据库密码、S3 密钥、JWT 密钥、LLM/Embedding API Key 等值：
 
 ```bash
 cp .env.example .env
@@ -118,3 +142,11 @@ dev 模式：
 - `/wiki-api/*` -> `wiki-backend:8000`
 
 聊天和文件上传走 RAG 链路：前端调用 `/api/chat/stream`（SSE 流式）或 `/api/admin/upload`，由 FastAPI 在内部完成文档索引和向量检索，不依赖外部服务。
+
+启动时会校验数据库、S3、JWT 和初始管理员凭证。`ENVIRONMENT=production` 时，已知默认值、
+短 JWT/管理员密码和通配符 CORS 会直接导致启动失败。首次启动创建的管理员使用
+`ADMIN_USERNAME` / `ADMIN_PASSWORD`，代码不再内置 `admin/admin123`。
+
+内容管理接口允许 `admin` 和 `editor`；用户管理与聊天审计接口只允许 `admin`。
+聊天来源会保存进历史记录，但面向普通用户的来源数据不包含内部 `storage_key`，服务端异常也不会
+把内部路径或上游地址直接返回给浏览器。

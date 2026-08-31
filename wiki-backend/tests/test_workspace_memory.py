@@ -27,6 +27,9 @@ def test_vector_store_search_filters_by_workspace() -> None:
     sql = str(captured["stmt"])
     compiled = captured["stmt"].compile()
     assert "workspace_id" in sql
+    assert "JOIN rag_documents" in sql
+    assert "JOIN files" in sql
+    assert "rag_documents.status" in sql
     assert "ws-a" in compiled.params.values()
 
 

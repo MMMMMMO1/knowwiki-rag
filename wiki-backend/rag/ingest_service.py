@@ -8,6 +8,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RagDocument
@@ -25,17 +26,29 @@ class IngestService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def ingest(self, file_id: int) -> RagDocument:
+    async def ingest(self, file_id: int, workspace_id: str | None = None) -> RagDocument:
         """为指定 Wiki 文件创建 RAG 入库记录（对 file_id 幂等）。
 
         只创建记录，不执行 loader/splitter/embedder。
         实际处理由 Celery rag-worker 在后台完成。
 
-        幂等策略：同一 file_id 已有记录则重置为 pending 并复用，
-        顺带清理历史遗留的重复记录，避免 scalar_one_or_none() 报错。
+        并发策略：用 PostgreSQL 事务级 advisory lock 串行化同一 file_id 的请求。
+        processing 期间的新请求只递增 generation，不重置状态；当前 worker 会在
+        发布前发现版本过期，回滚旧结果并重新投递最新版本。
         """
-        from sqlalchemy import select
         from app.models import File, RagDocument
+
+        normalized_workspace = workspace_id.strip() if workspace_id is not None else None
+        if normalized_workspace is not None and not normalized_workspace:
+            normalized_workspace = "default"
+        if normalized_workspace is not None and len(normalized_workspace) > 100:
+            raise ValueError("workspace_id 不能超过 100 个字符")
+
+        # 即使记录尚不存在，也能阻止两个并发请求同时创建相同 file_id。
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(:file_id)"),
+            {"file_id": file_id},
+        )
 
         # 查 Wiki 文件
         result = await self.db.execute(select(File).where(File.id == file_id))
@@ -45,22 +58,28 @@ class IngestService:
 
         # 幂等：同一 file_id 已有记录则复用，不重复创建
         existing_result = await self.db.execute(
-            select(RagDocument).where(RagDocument.file_id == file_id)
+            select(RagDocument)
+            .where(RagDocument.file_id == file_id)
+            .with_for_update()
         )
-        existing_docs = list(existing_result.scalars().all())
+        doc = existing_result.scalar_one_or_none()
 
-        if existing_docs:
-            doc = existing_docs[0]
-            # 清理历史遗留的重复记录
-            for extra in existing_docs[1:]:
-                await self.db.delete(extra)
-            doc.status = "pending"
+        if doc is not None:
+            doc.generation = (doc.generation or 1) + 1
             doc.error_message = None
             doc.title = file.title
+            if normalized_workspace is not None:
+                doc.workspace_id = normalized_workspace
             doc.queued_at = datetime.now(timezone.utc)
-            doc.processing_started_at = None
             doc.completed_at = None
             doc.failed_at = None
+            doc.retry_count = 0
+
+            if doc.status != "processing":
+                doc.status = "pending"
+                doc.processing_generation = None
+                doc.processing_started_at = None
+
             await self.db.flush()
             return doc
 
@@ -69,7 +88,9 @@ class IngestService:
             file_id=file.id,
             doc_id=str(uuid4()),
             title=file.title,
+            workspace_id=normalized_workspace or "default",
             status="pending",
+            generation=1,
             queued_at=datetime.now(timezone.utc),
         )
         self.db.add(doc)

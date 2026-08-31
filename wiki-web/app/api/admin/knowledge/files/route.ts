@@ -2,20 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const API_URL = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://wiki-backend:8000';
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
     try {
         const authHeader = request.headers.get('Authorization');
-        const force = request.nextUrl.searchParams.get('force');
-        const query = force === null ? '' : `?force=${encodeURIComponent(force)}`;
-        const response = await fetch(`${API_URL}/api/v1/admin/knowledge/rebuild${query}`, {
-            method: 'POST',
-            headers: { 'Authorization': authHeader || '' },
+        const response = await fetch(`${API_URL}/api/v1/admin/knowledge/files`, {
+            cache: 'no-store',
+            headers: { Authorization: authHeader || '' },
             signal: request.signal,
         });
         const data = await response.json();
         return NextResponse.json(data, { status: response.status });
     } catch (error) {
-        console.error('Knowledge rebuild proxy failed:', error);
+        console.error('Knowledge files proxy failed:', error);
         return NextResponse.json({ success: false, detail: 'Connection error' }, { status: 500 });
     }
 }

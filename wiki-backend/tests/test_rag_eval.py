@@ -1,6 +1,14 @@
-"""评估集测试 —— 离线可跑，不连真实数据库或外部 LLM。"""
+"""评估集测试 —— 覆盖同步/异步适配器和标准检索指标。"""
 
-from rag.eval import EVAL_DATASET, _score_item, evaluate_retrieval, generate_from_documents
+import asyncio
+
+from rag.eval import (
+    EVAL_DATASET,
+    _score_item,
+    evaluate_retrieval,
+    evaluate_retrieval_async,
+    generate_from_documents,
+)
 
 
 def test_evaluate_retrieval_full_hit() -> None:
@@ -19,6 +27,9 @@ def test_evaluate_retrieval_full_hit() -> None:
     assert result["total"] == len(EVAL_DATASET)
     assert result["hits"] == result["total"]
     assert result["hit_rate"] == 1.0
+    assert result["recall_at_k"] == 1.0
+    assert result["mrr"] == 1.0
+    assert result["ndcg"] == 1.0
     assert result["failures"] == []
 
 
@@ -54,3 +65,49 @@ def test_generate_from_documents() -> None:
     assert len(items) == 1
     assert items[0]["expected_files"] == ["a.md"]
     assert "a.md" in items[0]["question"]
+
+
+def test_metrics_reflect_first_relevant_rank() -> None:
+    dataset = [{
+        "question": "q",
+        "expected_files": ["target.md"],
+        "expected_keywords": [],
+        "must_include": [],
+    }]
+
+    def retrieve(_question):
+        return [
+            {"title": "other.md", "text": "x"},
+            {"title": "target.md", "text": "y"},
+        ]
+
+    result = evaluate_retrieval(retrieve, dataset=dataset, top_k=2)
+    assert result["recall_at_k"] == 1.0
+    assert result["mrr"] == 0.5
+    assert result["ndcg"] == 0.6309
+
+
+def test_must_include_participates_when_answer_fn_is_provided() -> None:
+    item = {
+        "expected_files": ["a.md"],
+        "expected_keywords": [],
+        "must_include": ["关键事实"],
+    }
+    sources = [{"title": "a.md", "text": "资料"}]
+    assert _score_item(item, sources, answer="包含关键事实")["passed"] is True
+    assert _score_item(item, sources, answer="遗漏了")["passed"] is False
+
+
+def test_async_retrieval_adapter() -> None:
+    dataset = [{
+        "question": "q",
+        "expected_files": ["a.md"],
+        "expected_keywords": ["关键词"],
+        "must_include": [],
+    }]
+
+    async def retrieve(_question):
+        return [{"title": "a.md", "text": "关键词"}]
+
+    result = asyncio.run(evaluate_retrieval_async(retrieve, dataset=dataset, top_k=1))
+    assert result["hit_rate"] == 1.0

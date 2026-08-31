@@ -98,7 +98,7 @@ class _RetrySignal(Exception):
 
 def test_process_rag_document_retries_when_retries_left() -> None:
     """可重试错误且还有重试机会：调用 self.retry，不 finalize。"""
-    from rag.tasks import process_rag_document
+    from rag.tasks import _process_rag_document
     from rag.exceptions import RetryableIndexingError
 
     fake_self = MagicMock()
@@ -111,7 +111,7 @@ def test_process_rag_document_retries_when_retries_left() -> None:
         mock_proc.finalize_failed = AsyncMock(return_value=None)
 
         with pytest.raises(_RetrySignal):
-            process_rag_document(fake_self, 123)
+            _process_rag_document(fake_self, 123)
 
         fake_self.retry.assert_called_once()
         mock_proc.finalize_failed.assert_not_awaited()
@@ -119,7 +119,7 @@ def test_process_rag_document_retries_when_retries_left() -> None:
 
 def test_process_rag_document_finalizes_when_retries_exhausted() -> None:
     """达到最大重试次数：改写成最终失败文案，不再重试。"""
-    from rag.tasks import process_rag_document
+    from rag.tasks import _process_rag_document
     from rag.exceptions import RetryableIndexingError
 
     fake_self = MagicMock()
@@ -131,7 +131,7 @@ def test_process_rag_document_finalizes_when_retries_exhausted() -> None:
         mock_proc.process = AsyncMock(side_effect=RetryableIndexingError("S3 文件为空"))
         mock_proc.finalize_failed = AsyncMock(return_value=None)
 
-        result = process_rag_document(fake_self, 123)
+        result = _process_rag_document(fake_self, 123)
 
         assert result["status"] == "failed"
         mock_proc.finalize_failed.assert_awaited_once_with(123, "S3 文件为空")

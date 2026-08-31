@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, backref
 from pgvector.sqlalchemy import Vector
@@ -89,6 +89,7 @@ class ChatLog(Base):
     session_id = Column(String(100), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # "user" or "assistant"
     content = Column(Text, nullable=False)
+    sources = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user = relationship("User")
@@ -114,15 +115,26 @@ class RagDocument(Base):
     """
 
     __tablename__ = "rag_documents"
+    __table_args__ = (
+        Index(
+            "uq_rag_documents_file_id",
+            "file_id",
+            unique=True,
+            postgresql_where=text("file_id IS NOT NULL"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    file_id = Column(Integer, ForeignKey("files.id", ondelete="SET NULL"), nullable=True, index=True)
+    file_id = Column(Integer, ForeignKey("files.id", ondelete="SET NULL"), nullable=True)
     doc_id = Column(String(36), unique=True, nullable=False, index=True)
     title = Column(String(500), nullable=False)
     content_hash = Column(String(64), nullable=True)
     # Namespace tag written at ingest time; retrieval filters on it for isolation.
     workspace_id = Column(String(100), nullable=False, default="default", index=True)
     status = Column(String(20), nullable=False, default="pending", index=True)
+    # 每次请求重新入库都会递增 generation；worker 只允许发布自己抢占的版本。
+    generation = Column(Integer, nullable=False, default=1)
+    processing_generation = Column(Integer, nullable=True)
     chunk_count = Column(Integer, nullable=False, default=0)
     retry_count = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
@@ -180,11 +192,25 @@ class Memory(Base):
     """
 
     __tablename__ = "memories"
+    __table_args__ = (
+        CheckConstraint(
+            "importance >= 0.0 AND importance <= 1.0",
+            name="ck_memories_importance_range",
+        ),
+        Index(
+            "uq_memories_user_workspace_content_hash",
+            "user_id",
+            "workspace_id",
+            "content_hash",
+            unique=True,
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     workspace_id = Column(String(100), nullable=False, default="default", index=True)
     content = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
     embedding = Column(Vector(1024), nullable=True)
     importance = Column(Float, nullable=False, default=0.5)
     source_session_id = Column(String(100), nullable=True)

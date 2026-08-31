@@ -11,7 +11,8 @@ from typing import Any
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import RagChunk, RagDocument
+from app.core.config import settings
+from app.models import File, RagChunk, RagDocument
 from rag.schemas import Chunk
 
 
@@ -79,9 +80,6 @@ class VectorStore:
             self.db.add(record)
             records.append(record)
 
-        document.chunk_count = len(chunks)
-        document.status = "completed"
-
         await self.db.flush()
         return records
 
@@ -92,6 +90,7 @@ class VectorStore:
         query_vector: list[float],
         top_k: int = 5,
         workspace_id: str = "default",
+        min_score: float | None = None,
     ) -> list[dict[str, Any]]:
         """余弦相似度检索 —— 返回最相关的 Chunk。
 
@@ -104,15 +103,22 @@ class VectorStore:
             列表，每项包含 chunk_id, text, score, metadata。
         """
         # pgvector 余弦相似度：1 - cosine_distance <=> cosine_similarity
+        score_expr = 1 - RagChunk.embedding.cosine_distance(query_vector)
+        threshold = settings.RETRIEVAL_MIN_SCORE if min_score is None else min_score
         query = (
             select(
                 RagChunk.chunk_id,
                 RagChunk.text,
                 RagChunk.metadata_,
-                (1 - RagChunk.embedding.cosine_distance(query_vector)).label("score"),
+                score_expr.label("score"),
             )
+            .join(RagDocument, RagChunk.document_id == RagDocument.id)
+            .join(File, RagDocument.file_id == File.id)
             .where(RagChunk.workspace_id == workspace_id)
+            .where(RagDocument.workspace_id == workspace_id)
+            .where(RagDocument.status == "completed")
             .where(RagChunk.embedding.is_not(None))
+            .where(score_expr >= threshold)
             .order_by(RagChunk.embedding.cosine_distance(query_vector))
             .limit(top_k)
         )
@@ -157,7 +163,11 @@ class VectorStore:
                 RagChunk.metadata_,
                 func.ts_rank(tsv, tsquery).label("score"),
             )
+            .join(RagDocument, RagChunk.document_id == RagDocument.id)
+            .join(File, RagDocument.file_id == File.id)
             .where(RagChunk.workspace_id == workspace_id)
+            .where(RagDocument.workspace_id == workspace_id)
+            .where(RagDocument.status == "completed")
             .where(RagChunk.search_text.is_not(None))
             .where(tsv.op("@@")(tsquery))
             .order_by(desc("score"))
@@ -182,9 +192,6 @@ class VectorStore:
             text("DELETE FROM rag_chunks WHERE document_id = :doc_id"),
             {"doc_id": document.id},
         )
-        document.chunk_count = 0
-        document.status = "pending"
-        await self.db.flush()
 
     async def delete_by_file_id(self, file_id: int) -> None:
         """按 Wiki 文件 ID 删除对应 RAG 索引（兼容同一 file_id 有多条历史记录）。"""

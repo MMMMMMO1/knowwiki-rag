@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 
-from app.models import File, RagDocument
+from app.models import File, RagDocument, User
+
+
+ADMIN = User(id=1, username="admin", role="admin", is_active=True)
 
 
 def test_knowledge_files_returns_rag_status() -> None:
@@ -52,7 +55,7 @@ def test_rebuild_file_success() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return doc
 
     class FakeDB:
@@ -80,7 +83,7 @@ def test_rebuild_file_enqueue_failure_raises_500() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return doc
 
     class FakeDB:
@@ -121,7 +124,7 @@ def test_upload_without_overwrite_rejects_existing() -> None:
             with pytest.raises(HTTPException) as exc_info:
                 await upload_file(
                     file=FakeUpload(), folder_id=None, overwrite=False,
-                    _="token", db=FakeDB(),
+                    workspace_id="default", current_user=ADMIN, db=FakeDB(),
                 )
             return exc_info.value
 
@@ -146,7 +149,7 @@ def test_upload_overwrite_updates_and_requeues() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return rag_doc
 
     class FakeDB:
@@ -163,7 +166,7 @@ def test_upload_overwrite_updates_and_requeues() -> None:
                 patch("rag.tasks.enqueue_rag_document_task", return_value=True):
             return await upload_file(
                 file=FakeUpload(), folder_id=None, overwrite=True,
-                _="token", db=FakeDB(),
+                workspace_id="default", current_user=ADMIN, db=FakeDB(),
             )
 
     resp = asyncio.run(run())
@@ -190,7 +193,7 @@ def test_upload_overwrite_enqueue_failure_marks_failed() -> None:
         def __init__(self, db):
             pass
 
-        async def ingest(self, file_id):
+        async def ingest(self, file_id, workspace_id=None):
             return rag_doc
 
     class FakeDB:
@@ -208,7 +211,7 @@ def test_upload_overwrite_enqueue_failure_marks_failed() -> None:
                 patch("rag.task_worker.mark_rag_document_failed", new=mark_failed):
             return await upload_file(
                 file=FakeUpload(), folder_id=None, overwrite=True,
-                _="token", db=FakeDB(),
+                workspace_id="default", current_user=ADMIN, db=FakeDB(),
             )
 
     resp = asyncio.run(run())
@@ -230,6 +233,9 @@ def _make_rebuild_db(files, docs):
         def all(self):
             return self._rows
 
+        def scalar_one_or_none(self):
+            return self._rows[0] if len(self._rows) == 1 else None
+
     class FakeDB:
         def __init__(self):
             self.calls = 0
@@ -238,7 +244,20 @@ def _make_rebuild_db(files, docs):
             self.calls += 1
             if self.calls == 1:
                 return FakeResult(files)
-            return FakeResult(docs)
+            if self.calls == 2:
+                return FakeResult(docs)
+            # 每次 IngestService.ingest 依次执行 advisory lock、File、RagDocument。
+            phase = (self.calls - 3) % 3
+            item_index = (self.calls - 3) // 3
+            if phase == 0:
+                return FakeResult([])
+            if phase == 1:
+                return FakeResult([files[item_index]])
+            file_id = files[item_index].id
+            return FakeResult([doc for doc in docs if doc.file_id == file_id])
+
+        async def flush(self):
+            pass
 
         async def commit(self):
             pass

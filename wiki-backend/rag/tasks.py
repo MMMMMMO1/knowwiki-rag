@@ -37,7 +37,11 @@ def _run_async(coro):
     max_retries=settings.RAG_TASK_MAX_RETRIES,
 )
 def process_rag_document(self, rag_document_id: int) -> dict:
-    """处理单个 RAG 入库任务。
+    return _process_rag_document(self, rag_document_id)
+
+
+def _process_rag_document(task, rag_document_id: int) -> dict:
+    """处理单个 RAG 入库任务；独立函数便于在真实 Celery 环境中单测。
 
     任务内部自己创建 AsyncSessionLocal()，不复用 FastAPI request db session。
     Celery task 是同步函数，内部用 asyncio.run() 调用异步处理逻辑。
@@ -46,11 +50,22 @@ def process_rag_document(self, rag_document_id: int) -> dict:
 
     try:
         status = _run_async(processor.process(rag_document_id))
+        if status == "superseded":
+            queued = enqueue_rag_document_task(rag_document_id)
+            if not queued:
+                from rag.task_worker import mark_rag_document_failed
+
+                _run_async(
+                    mark_rag_document_failed(
+                        rag_document_id,
+                        "最新版本的 Celery 任务投递失败（Redis 不可用）",
+                    )
+                )
         return {"rag_document_id": rag_document_id, "status": status}
     except RetryableIndexingError as exc:
         # 还有重试机会：交给 Celery 延迟后自动重试
-        if self.request.retries < settings.RAG_TASK_MAX_RETRIES:
-            raise self.retry(
+        if task.request.retries < settings.RAG_TASK_MAX_RETRIES:
+            raise task.retry(
                 exc=exc,
                 countdown=settings.RAG_TASK_RETRY_DELAY_SECONDS,
             )
@@ -136,3 +151,13 @@ def enqueue_rag_document_tasks(rag_document_ids: list[int]) -> tuple[int, int]:
         else:
             failed += 1
     return enqueued, failed
+
+
+@celery_app.task(name="rag.tasks.recover_stale_rag_documents")
+def recover_stale_rag_documents() -> dict:
+    """worker 启动后恢复超时 processing 记录并重新投递。"""
+    from rag.task_worker import reset_stale_processing_documents
+
+    stale_ids = _run_async(reset_stale_processing_documents())
+    enqueued, failed = enqueue_rag_document_tasks(stale_ids)
+    return {"stale": len(stale_ids), "enqueued": enqueued, "failed": failed}

@@ -2,8 +2,9 @@
 文档加载模块 —— 基于 Microsoft MarkItDown 解析多格式文件。
 
 索引链路唯一的文档解析入口。基于 Microsoft MarkItDown，
-支持 PDF、DOCX、PPTX、XLSX、HTML、图片、音频、EPUB、CSV 等格式，
-统一产出 Markdown 文本。
+解析器本身支持 PDF、DOCX、PPTX、XLSX、HTML、图片、音频、EPUB、CSV 等格式，
+统一产出 Markdown 文本。产品上传接口当前只开放 .md、.html、.docx、.txt、.pdf；
+不要把解析器能力误解为管理端已开放的上传格式。
 """
 
 import io
@@ -69,4 +70,3 @@ class DocumentLoader:
             content=result.text_content,
             metadata={**metadata, "file_type": suffix.lstrip(".")},
         )
-

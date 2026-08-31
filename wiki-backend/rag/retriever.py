@@ -4,6 +4,7 @@
 编排 Embedder + VectorStore，将用户自然语言问题转换为最相关的 Chunk 列表。
 """
 
+import logging
 from typing import Any
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from rag.vector_store import VectorStore
 
 # RRF 融合的常量 k：名次权重分母里的平滑项，业界常用 60。
 RRF_K = 60
+logger = logging.getLogger(__name__)
 
 
 def rrf_fuse(
@@ -104,8 +106,11 @@ class Retriever:
 
         # 4. Re-rank: when enabled, re-score candidates with a cross-encoder reranker, keep top_k
         if settings.RERANK_ENABLED and results:
-            reranker = self._build_reranker()
-            results = await reranker.rerank(query, results)
+            try:
+                reranker = self._build_reranker()
+                results = await reranker.rerank(query, results)
+            except Exception as exc:
+                logger.warning("Rerank unavailable; using recall results: %s", type(exc).__name__)
             results = results[: self.top_k]
 
         return results
@@ -121,6 +126,7 @@ class Retriever:
             "keyword_results": [],
             "merged_results": [],
             "rerank_results": [],
+            "rerank_error": None,
             "final_results": [],
         }
         if not query.strip():
@@ -153,10 +159,14 @@ class Retriever:
 
         # 4. 精排
         if settings.RERANK_ENABLED and results:
-            reranker = self._build_reranker()
-            reranked = await reranker.rerank(query, results)
-            debug["rerank_results"] = [self._result_to_dict(r) for r in reranked]
-            results = reranked[: self.top_k]
+            try:
+                reranker = self._build_reranker()
+                reranked = await reranker.rerank(query, results)
+                debug["rerank_results"] = [self._result_to_dict(r) for r in reranked]
+                results = reranked[: self.top_k]
+            except Exception as exc:
+                debug["rerank_error"] = type(exc).__name__
+                results = results[: self.top_k]
 
         debug["final_results"] = [self._result_to_dict(r) for r in results]
         return debug

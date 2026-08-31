@@ -7,7 +7,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import argparse
+import asyncio
+import inspect
+import json
+import math
+from pathlib import Path
+from typing import Any, Awaitable, Callable
 
 # 示例评估集：question + 期望命中的文件/关键词/必含事实。
 # expected_files 与 sources 的 title / full_path 匹配；
@@ -77,59 +83,176 @@ EVAL_DATASET: list[dict[str, Any]] = [
 ]
 
 RetrieveFn = Callable[[str], list[dict[str, Any]]]
+AsyncRetrieveFn = Callable[[str], Awaitable[list[Any]]]
+AnswerFn = Callable[[str, list[dict[str, Any]]], str]
+AsyncAnswerFn = Callable[[str, list[dict[str, Any]]], Awaitable[str]]
 
 
-def evaluate_retrieval(retrieve_fn: RetrieveFn) -> dict[str, Any]:
+def evaluate_retrieval(
+    retrieve_fn: RetrieveFn,
+    dataset: list[dict[str, Any]] | None = None,
+    answer_fn: AnswerFn | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
     """逐条调用 retrieve_fn 并统计召回命中情况。
 
     返回 {total, hits, hit_rate, failures}，失败样例附带 detail 与 sources。
     """
-    hits = 0
+    dataset = dataset or EVAL_DATASET
+    scores: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    for item in EVAL_DATASET:
+    for item in dataset:
         try:
-            sources = retrieve_fn(item["question"])
+            raw_sources = retrieve_fn(item["question"])
+            if inspect.isawaitable(raw_sources):
+                raise TypeError("异步 retrieve_fn 请使用 evaluate_retrieval_async()")
+            sources = _normalize_sources(raw_sources)
+            answer = answer_fn(item["question"], sources) if answer_fn else None
         except Exception as exc:
             failures.append({**item, "error": str(exc)})
             continue
-        score = _score_item(item, sources)
-        if score["passed"]:
-            hits += 1
-        else:
+        score = _score_item(item, sources, answer=answer, top_k=top_k)
+        scores.append(score)
+        if not score["passed"]:
             failures.append({**item, "detail": score, "sources": sources})
 
-    total = len(EVAL_DATASET)
-    return {
-        "total": total,
-        "hits": hits,
-        "hit_rate": round(hits / total, 4) if total else 0.0,
-        "failures": failures,
-    }
+    return _summarize(dataset, scores, failures, top_k)
+
+
+async def evaluate_retrieval_async(
+    retrieve_fn: AsyncRetrieveFn,
+    dataset: list[dict[str, Any]] | None = None,
+    answer_fn: AsyncAnswerFn | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    """异步评估真实 Retriever/数据库链路。"""
+    dataset = dataset or EVAL_DATASET
+    scores: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for item in dataset:
+        try:
+            sources = _normalize_sources(await retrieve_fn(item["question"]))
+            answer = await answer_fn(item["question"], sources) if answer_fn else None
+        except Exception as exc:
+            failures.append({**item, "error": str(exc)})
+            continue
+        score = _score_item(item, sources, answer=answer, top_k=top_k)
+        scores.append(score)
+        if not score["passed"]:
+            failures.append({**item, "detail": score, "sources": sources})
+    return _summarize(dataset, scores, failures, top_k)
+
+
+async def evaluate_retriever(
+    retriever: Any,
+    dataset: list[dict[str, Any]] | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    """真实 Retriever 适配器。"""
+    return await evaluate_retrieval_async(
+        retriever.retrieve,
+        dataset=dataset,
+        top_k=top_k,
+    )
+
+
+def _normalize_sources(sources: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for source in sources:
+        if isinstance(source, dict):
+            normalized.append(source)
+            continue
+        metadata = getattr(source, "metadata", {}) or {}
+        normalized.append(
+            {
+                "chunk_id": getattr(source, "chunk_id", ""),
+                "text": getattr(source, "text", ""),
+                "score": getattr(source, "score", 0.0),
+                "title": metadata.get("title", ""),
+                "full_path": metadata.get("full_path", ""),
+                "chunk_index": metadata.get("chunk_index"),
+            }
+        )
+    return normalized
 
 
 def _score_item(
     item: dict[str, Any],
     sources: list[dict[str, Any]],
+    answer: str | None = None,
+    top_k: int | None = None,
 ) -> dict[str, Any]:
-    """根据 sources 判断是否命中目标文件与关键词。"""
-    titles = {s.get("title", "") for s in sources}
-    paths = {s.get("full_path", "") for s in sources}
-    text = " ".join(s.get("text", "") for s in sources)
-
+    """计算单条 Recall@K、MRR、NDCG、关键词和答案事实命中。"""
+    top_k = top_k or len(sources) or 1
     expected_files = set(item.get("expected_files", []))
-    file_hit = bool(expected_files) and bool(
-        expected_files & titles or expected_files & paths
-    )
+    relevant_ranks = [
+        rank
+        for rank, source in enumerate(sources, 1)
+        if source.get("title", "") in expected_files
+        or source.get("full_path", "") in expected_files
+    ]
+    first_rank = min(relevant_ranks) if relevant_ranks else None
+    text = " ".join(s.get("text", "") for s in sources)
+    file_hit = first_rank is not None
 
     expected_keywords = item.get("expected_keywords", [])
     keyword_hit = all(keyword in text for keyword in expected_keywords)
 
+    must_include = item.get("must_include", [])
+    answer_fact_hit = None
+    if answer is not None and must_include:
+        answer_fact_hit = all(fact in answer for fact in must_include)
+
+    reciprocal_rank = 1.0 / first_rank if first_rank is not None else 0.0
+    ndcg = 1.0 / math.log2(first_rank + 1) if first_rank is not None else 0.0
+    passed = file_hit and keyword_hit and answer_fact_hit is not False
+
     return {
         "file_hit": file_hit,
         "keyword_hit": keyword_hit,
-        "passed": file_hit and keyword_hit,
+        "answer_fact_hit": answer_fact_hit,
+        "recall_at_k": 1.0 if first_rank is not None and first_rank <= top_k else 0.0,
+        "reciprocal_rank": reciprocal_rank,
+        "ndcg": ndcg,
+        "first_relevant_rank": first_rank,
+        "passed": passed,
         "sources_count": len(sources),
     }
+
+
+def _summarize(
+    dataset: list[dict[str, Any]],
+    scores: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    top_k: int | None,
+) -> dict[str, Any]:
+    total = len(dataset)
+    hits = sum(1 for score in scores if score["passed"])
+    answer_scores = [score for score in scores if score["answer_fact_hit"] is not None]
+    denominator = total or 1
+    return {
+        "total": total,
+        "hits": hits,
+        "hit_rate": round(hits / denominator, 4) if total else 0.0,
+        "recall_at_k": round(sum(s["recall_at_k"] for s in scores) / denominator, 4) if total else 0.0,
+        "mrr": round(sum(s["reciprocal_rank"] for s in scores) / denominator, 4) if total else 0.0,
+        "ndcg": round(sum(s["ndcg"] for s in scores) / denominator, 4) if total else 0.0,
+        "keyword_hit_rate": round(sum(bool(s["keyword_hit"]) for s in scores) / denominator, 4) if total else 0.0,
+        "answer_fact_rate": (
+            round(sum(bool(s["answer_fact_hit"]) for s in answer_scores) / len(answer_scores), 4)
+            if answer_scores else None
+        ),
+        "top_k": top_k,
+        "failures": failures,
+    }
+
+
+def load_dataset(path: str | Path) -> list[dict[str, Any]]:
+    """从 JSON 文件加载可版本化的真实评估集。"""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+        raise ValueError("评估集必须是 JSON 对象数组")
+    return data
 
 
 def generate_from_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -151,21 +274,32 @@ def generate_from_documents(documents: list[dict[str, Any]]) -> list[dict[str, A
     return items
 
 
-if __name__ == "__main__":
-    # 离线示例：用全命中 fake retriever 演示评估输出格式。
-    def _fake_retriever(question: str) -> list[dict[str, Any]]:
-        item = next(i for i in EVAL_DATASET if i["question"] == question)
-        return [
-            {
-                "title": item["expected_files"][0],
-                "full_path": item["expected_files"][0],
-                "text": " ".join(item["expected_keywords"]),
-                "score": 0.9,
-                "chunk_index": 0,
-            }
-        ]
+async def _run_cli(args: argparse.Namespace) -> dict[str, Any]:
+    from app.core.database import AsyncSessionLocal
+    from rag.embedding import Embedder
+    from rag.retriever import Retriever
+    from rag.vector_store import VectorStore
 
-    result = evaluate_retrieval(_fake_retriever)
-    print(f"total={result['total']} hits={result['hits']} hit_rate={result['hit_rate']}")
-    for failure in result["failures"]:
-        print("FAIL:", failure["question"], failure.get("detail"))
+    dataset = load_dataset(args.dataset)
+    async with AsyncSessionLocal() as db:
+        retriever = Retriever(
+            Embedder(),
+            VectorStore(db),
+            top_k=args.top_k,
+            workspace_id=args.workspace,
+        )
+        return await evaluate_retriever(retriever, dataset=dataset, top_k=args.top_k)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="运行真实 RAG 检索评估")
+    parser.add_argument("--dataset", required=True, help="JSON 评估集路径")
+    parser.add_argument("--workspace", default="default")
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--output", help="可选 JSON 报告输出路径")
+    cli_args = parser.parse_args()
+    result = asyncio.run(_run_cli(cli_args))
+    rendered = json.dumps(result, ensure_ascii=False, indent=2)
+    if cli_args.output:
+        Path(cli_args.output).write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)

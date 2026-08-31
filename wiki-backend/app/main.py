@@ -13,6 +13,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup: Initialize database and S3
     print("Starting up...")
+    settings.validate_runtime_security()
     check_and_create_database()
     await init_db()
 

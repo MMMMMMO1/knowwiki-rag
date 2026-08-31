@@ -2,7 +2,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import create_engine
-from sqlalchemy.exc import ProgrammingError
 
 from app.core.config import settings
 
@@ -64,6 +63,37 @@ _WORKSPACE_MEMORY_MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS ix_rag_chunks_workspace_id ON rag_chunks (workspace_id)",
 ]
 
+# Keep in sync with migrations/0005_add_ingest_generation_and_chat_sources.sql.
+_INGEST_CONSISTENCY_MIGRATION_STATEMENTS = [
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS generation INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS processing_generation INTEGER",
+    "WITH ranked AS ("
+    "SELECT id, row_number() OVER (PARTITION BY file_id "
+    "ORDER BY updated_at DESC NULLS LAST, id DESC) AS row_number "
+    "FROM rag_documents WHERE file_id IS NOT NULL"
+    ") DELETE FROM rag_documents WHERE id IN "
+    "(SELECT id FROM ranked WHERE row_number > 1)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_documents_file_id "
+    "ON rag_documents (file_id) WHERE file_id IS NOT NULL",
+    "ALTER TABLE chat_logs ADD COLUMN IF NOT EXISTS sources JSONB NOT NULL DEFAULT '[]'::jsonb",
+]
+
+_MEMORY_HARDENING_MIGRATION_STATEMENTS = [
+    "ALTER TABLE memories ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+    "UPDATE memories SET content_hash = md5(content) WHERE content_hash IS NULL",
+    "ALTER TABLE memories ALTER COLUMN content_hash SET NOT NULL",
+    "WITH ranked AS (SELECT id, row_number() OVER ("
+    "PARTITION BY user_id, workspace_id, content_hash "
+    "ORDER BY importance DESC, updated_at DESC, id DESC) AS row_number FROM memories) "
+    "DELETE FROM memories WHERE id IN (SELECT id FROM ranked WHERE row_number > 1)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_user_workspace_content_hash "
+    "ON memories (user_id, workspace_id, content_hash)",
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
+    "WHERE conname = 'ck_memories_importance_range') THEN "
+    "ALTER TABLE memories ADD CONSTRAINT ck_memories_importance_range "
+    "CHECK (importance >= 0.0 AND importance <= 1.0); END IF; END $$",
+]
+
 # Keep in sync with migrations/0004_add_vector_indexes.sql.
 # HNSW index accelerates cosine-distance nearest-neighbor search as data grows.
 # NOTE: building an HNSW index on an existing large table can block startup for a
@@ -80,42 +110,38 @@ _VECTOR_INDEX_MIGRATION_STATEMENTS = [
 
 async def _apply_rag_queue_migration(conn) -> None:
     """幂等补齐 rag_documents 的消息队列列（对新建表为 no-op）。"""
-    try:
-        for statement in _RAG_QUEUE_MIGRATION_STATEMENTS:
-            await conn.execute(text(statement))
-    except ProgrammingError:
-        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
-        pass
+    for statement in _RAG_QUEUE_MIGRATION_STATEMENTS:
+        await conn.execute(text(statement))
 
 
 async def _apply_hybrid_search_migration(conn) -> None:
     """幂等补齐 rag_chunks 的关键词检索列与 GIN 索引。"""
-    try:
-        for statement in _HYBRID_SEARCH_MIGRATION_STATEMENTS:
-            await conn.execute(text(statement))
-    except ProgrammingError:
-        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
-        pass
+    for statement in _HYBRID_SEARCH_MIGRATION_STATEMENTS:
+        await conn.execute(text(statement))
 
 
 async def _apply_workspace_memory_migration(conn) -> None:
     """幂等补齐 rag_documents/rag_chunks 的 workspace_id 命名空间列。"""
-    try:
-        for statement in _WORKSPACE_MEMORY_MIGRATION_STATEMENTS:
-            await conn.execute(text(statement))
-    except ProgrammingError:
-        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
-        pass
+    for statement in _WORKSPACE_MEMORY_MIGRATION_STATEMENTS:
+        await conn.execute(text(statement))
+
+
+async def _apply_ingest_consistency_migration(conn) -> None:
+    """补齐同文件唯一性、入库版本字段与聊天来源字段。"""
+    for statement in _INGEST_CONSISTENCY_MIGRATION_STATEMENTS:
+        await conn.execute(text(statement))
+
+
+async def _apply_memory_hardening_migration(conn) -> None:
+    """补齐长期记忆去重与重要性约束。"""
+    for statement in _MEMORY_HARDENING_MIGRATION_STATEMENTS:
+        await conn.execute(text(statement))
 
 
 async def _apply_vector_index_migration(conn) -> None:
     """幂等创建 embedding 列的 HNSW 向量索引。"""
-    try:
-        for statement in _VECTOR_INDEX_MIGRATION_STATEMENTS:
-            await conn.execute(text(statement))
-    except ProgrammingError:
-        # 表尚不存在（首次启动 create_all 尚未建表时）——由 create_all 保证完整建表
-        pass
+    for statement in _VECTOR_INDEX_MIGRATION_STATEMENTS:
+        await conn.execute(text(statement))
 
 
 def check_and_create_database() -> bool:
@@ -185,6 +211,8 @@ async def init_db():
         await _apply_hybrid_search_migration(conn)
         # 幂等迁移：补齐 workspace 命名空间列
         await _apply_workspace_memory_migration(conn)
+        await _apply_ingest_consistency_migration(conn)
+        await _apply_memory_hardening_migration(conn)
         # 幂等迁移：创建 embedding 列的 HNSW 向量索引（仅显式开启时执行，避免大表阻塞启动）
         if settings.AUTO_APPLY_VECTOR_INDEXES:
             await _apply_vector_index_migration(conn)
@@ -193,16 +221,16 @@ async def init_db():
     # Seed default admin user if no users exist
     from sqlalchemy import select
     from app.core.security import get_password_hash
-    import os
-
     async with AsyncSessionLocal() as session:
         try:
             result = await session.execute(select(models.User).limit(1))
             user = result.scalars().first()
             if not user:
                 print("No users found. Seeding default administrator...")
-                admin_username = os.getenv("ADMIN_USERNAME", "admin")
-                admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+                admin_username = settings.ADMIN_USERNAME
+                admin_password = settings.ADMIN_PASSWORD
+                if not admin_password:
+                    raise RuntimeError("ADMIN_PASSWORD 未配置，拒绝创建默认管理员")
 
                 hashed_pw = get_password_hash(admin_password)
                 default_admin = models.User(

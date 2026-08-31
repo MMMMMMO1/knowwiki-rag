@@ -4,7 +4,7 @@ Pydantic schemas for API request/response models.
 
 from typing import Optional, List, Literal
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ============== Folder Schemas ==============
@@ -142,6 +142,7 @@ class ChatMessageAudit(BaseModel):
     id: int
     role: str
     content: str
+    sources: list[dict] = Field(default_factory=list)
     created_at: datetime
 
 class SyncHistoryItem(BaseModel):

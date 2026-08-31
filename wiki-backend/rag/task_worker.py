@@ -65,8 +65,9 @@ class RagIndexingProcessor:
         - skipped: 任务不存在、已被处理（重复消息），或文件已被删除，不重复处理
         可重试错误会抛 RetryableIndexingError（状态已写 failed 并注明将自动重试）。
         """
-        # 1. 原子抢占：只允许 pending/failed → processing（防止重复消息并发处理）
-        if not await self._claim_processing(rag_document_id):
+        # 1. 原子抢占当前 generation：只允许 pending/failed → processing。
+        claimed_generation = await self._claim_processing(rag_document_id)
+        if claimed_generation is None:
             return "skipped"
 
         # 2. 执行流水线
@@ -76,50 +77,60 @@ class RagIndexingProcessor:
                 return "skipped"
 
             try:
-                await self._run_pipeline(db, doc)
-                doc.status = "completed"
-                doc.error_message = None
-                doc.completed_at = _utcnow()
-                doc.failed_at = None
+                published = await self._run_pipeline(db, doc, claimed_generation)
+                if not published:
+                    await db.rollback()
+                    await self._mark_superseded(rag_document_id, claimed_generation)
+                    return "superseded"
                 await db.commit()
                 return "completed"
             except SkipIndexingError as exc:
                 # 文件已被删除等：跳过，不算失败，也不自动重试
                 await db.rollback()
+                if await self._mark_superseded(rag_document_id, claimed_generation):
+                    return "superseded"
                 await self._mark_skipped(
-                    rag_document_id, sanitize_error_message(str(exc))
+                    rag_document_id,
+                    claimed_generation,
+                    sanitize_error_message(str(exc)),
                 )
                 return "skipped"
             except Exception as exc:
                 # 失败：回滚当前事务，写 failed + 脱敏错误（可重试则注明）
                 await db.rollback()
+                if await self._mark_superseded(rag_document_id, claimed_generation):
+                    return "superseded"
                 await self._mark_failed(
                     rag_document_id,
+                    claimed_generation,
                     sanitize_error_message(str(exc)),
                     retryable=isinstance(exc, RetryableIndexingError),
                 )
                 # 重新抛出，让上层（Celery task）决定是否重试
                 raise
 
-    async def _claim_processing(self, rag_document_id: int) -> bool:
+    async def _claim_processing(self, rag_document_id: int) -> int | None:
         """原子抢占状态：只允许 pending/failed → processing。
 
-        用 UPDATE ... WHERE id=:id AND status IN ('pending','failed') 的 rowcount
-        判断是否抢占成功，避免重复消息并发处理同一文档。
+        返回本次抢占的 generation；抢占失败返回 None。
         """
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
+            statement = (
                 update(RagDocument)
                 .where(RagDocument.id == rag_document_id)
                 .where(RagDocument.status.in_(["pending", "failed"]))
                 .values(
                     status="processing",
+                    processing_generation=RagDocument.generation,
                     processing_started_at=_utcnow(),
                     error_message=None,
                 )
+                .returning(RagDocument.generation)
             )
+            result = await db.execute(statement)
+            generation = result.scalar_one_or_none()
             await db.commit()
-            return (result.rowcount or 0) > 0
+            return generation
 
     async def _load_document(
         self, db: AsyncSession, rag_document_id: int
@@ -131,39 +142,76 @@ class RagIndexingProcessor:
         return result.scalar_one_or_none()
 
     async def _mark_failed(
-        self, rag_document_id: int, message: str, retryable: bool = False
-    ) -> None:
+        self,
+        rag_document_id: int,
+        claimed_generation: int,
+        message: str,
+        retryable: bool = False,
+    ) -> bool:
         """把 RagDocument 标记为 failed：写入脱敏错误、retry_count +1、failed_at。
 
         可重试错误会在错误信息前加「将自动重试」标记，便于管理端区分。
         """
         final_message = f"【将自动重试】{message}" if retryable else message
         async with AsyncSessionLocal() as db:
-            await db.execute(
+            result = await db.execute(
                 update(RagDocument)
                 .where(RagDocument.id == rag_document_id)
+                .where(RagDocument.status == "processing")
+                .where(RagDocument.generation == claimed_generation)
+                .where(RagDocument.processing_generation == claimed_generation)
                 .values(
                     status="failed",
+                    processing_generation=None,
                     error_message=final_message,
                     failed_at=_utcnow(),
                     retry_count=RagDocument.retry_count + 1,
                 )
             )
             await db.commit()
+            return (result.rowcount or 0) > 0
 
-    async def _mark_skipped(self, rag_document_id: int, message: str) -> None:
+    async def _mark_skipped(
+        self, rag_document_id: int, claimed_generation: int, message: str
+    ) -> bool:
         """把 RagDocument 标记为 skipped：不算失败、不自动重试、不累加 retry_count。"""
         async with AsyncSessionLocal() as db:
-            await db.execute(
+            result = await db.execute(
                 update(RagDocument)
                 .where(RagDocument.id == rag_document_id)
+                .where(RagDocument.status == "processing")
+                .where(RagDocument.generation == claimed_generation)
+                .where(RagDocument.processing_generation == claimed_generation)
                 .values(
                     status="skipped",
+                    processing_generation=None,
                     error_message=message,
                     failed_at=None,
                 )
             )
             await db.commit()
+            return (result.rowcount or 0) > 0
+
+    async def _mark_superseded(
+        self, rag_document_id: int, claimed_generation: int
+    ) -> bool:
+        """旧 worker 发现有更新 generation 时，安全退回 pending 等待最新任务。"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                update(RagDocument)
+                .where(RagDocument.id == rag_document_id)
+                .where(RagDocument.status == "processing")
+                .where(RagDocument.processing_generation == claimed_generation)
+                .where(RagDocument.generation > claimed_generation)
+                .values(
+                    status="pending",
+                    processing_generation=None,
+                    processing_started_at=None,
+                    error_message=None,
+                )
+            )
+            await db.commit()
+            return (result.rowcount or 0) > 0
 
     async def finalize_failed(self, rag_document_id: int, message: str) -> None:
         """重试耗尽后的最终失败写入 —— 只改写错误文案，不重复累加 retry_count。
@@ -177,15 +225,17 @@ class RagIndexingProcessor:
             await db.execute(
                 update(RagDocument)
                 .where(RagDocument.id == rag_document_id)
+                .where(RagDocument.status == "failed")
                 .values(
-                    status="failed",
                     error_message=final_message,
                     failed_at=_utcnow(),
                 )
             )
             await db.commit()
 
-    async def _run_pipeline(self, db: AsyncSession, doc: RagDocument) -> None:
+    async def _run_pipeline(
+        self, db: AsyncSession, doc: RagDocument, claimed_generation: int
+    ) -> bool:
         """加载 → 解析 → 切分 → 嵌入 → 写入。"""
         # 1. 从 S3/RustFS 读原始字节
         content_bytes, file = await self._load_raw_bytes(db, doc)
@@ -208,20 +258,38 @@ class RagIndexingProcessor:
             raise ValueError("文档内容为空，无法索引")
 
         # 4. 计算 content_hash
-        doc.content_hash = hashlib.sha256(
+        content_hash = hashlib.sha256(
             document.content.encode("utf-8")
         ).hexdigest()
 
-        # 5. 清理旧 chunks（支持重复处理 / 重新上传）
-        store = VectorStore(db)
-        await store.delete_by_document(doc)
-
-        # 6. splitter → embedder → vector_store
+        # 5. 先在内存中完成 splitter + embedding；版本过期时不触碰线上 chunks。
         splitter = TextSplitter()
         embedder = Embedder()
         chunks = splitter.split(document)
         vectors = await embedder.embed(chunks)
+
+        # 6. 删除与写入处于同一事务；最终条件 UPDATE 失败时整体 rollback。
+        store = VectorStore(db)
+        await store.delete_by_document(doc)
         await store.insert(doc, chunks, vectors)
+
+        result = await db.execute(
+            update(RagDocument)
+            .where(RagDocument.id == doc.id)
+            .where(RagDocument.status == "processing")
+            .where(RagDocument.generation == claimed_generation)
+            .where(RagDocument.processing_generation == claimed_generation)
+            .values(
+                status="completed",
+                processing_generation=None,
+                content_hash=content_hash,
+                chunk_count=len(chunks),
+                error_message=None,
+                completed_at=_utcnow(),
+                failed_at=None,
+            )
+        )
+        return (result.rowcount or 0) > 0
 
     async def _load_raw_bytes(
         self, db: AsyncSession, doc: RagDocument
@@ -278,6 +346,7 @@ async def reset_stale_processing_documents() -> list[int]:
             .where(RagDocument.status == "processing")
             .values(
                 status="pending",
+                processing_generation=None,
                 error_message=None,
                 processing_started_at=None,
             )
@@ -292,8 +361,10 @@ async def mark_rag_document_failed(rag_document_id: int, message: str) -> None:
         await db.execute(
             update(RagDocument)
             .where(RagDocument.id == rag_document_id)
+            .where(RagDocument.status.in_(["pending", "failed"]))
             .values(
                 status="failed",
+                processing_generation=None,
                 error_message=sanitize_error_message(message),
                 failed_at=_utcnow(),
                 retry_count=RagDocument.retry_count + 1,

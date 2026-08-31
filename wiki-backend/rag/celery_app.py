@@ -22,6 +22,7 @@ celery_app.conf.update(
     task_routes={
         "rag.tasks.process_rag_document": {"queue": "rag-indexing"},
         "rag.tasks.extract_memories": {"queue": "rag-indexing"},
+        "rag.tasks.recover_stale_rag_documents": {"queue": "rag-indexing"},
     },
     task_serializer="json",
     result_serializer="json",
@@ -49,3 +50,18 @@ celery_app.conf.update(
 
 # 让 celery 能找到任务（worker 启动时通过 -A rag.celery_app:celery_app 自动导入）
 celery_app.autodiscover_tasks(["rag"])
+
+
+try:
+    from celery.signals import worker_ready
+except (ImportError, ModuleNotFoundError):  # 测试环境可能使用最小 Celery stub
+    worker_ready = None
+
+
+if worker_ready is not None:
+    @worker_ready.connect
+    def _schedule_stale_recovery(**_kwargs):
+        """worker 单独重启时也主动扫描僵尸 processing 任务。"""
+        from rag.tasks import recover_stale_rag_documents
+
+        recover_stale_rag_documents.delay()

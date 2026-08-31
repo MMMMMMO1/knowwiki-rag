@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "Wiki Backend"
     DEBUG: bool = False
+    ENVIRONMENT: str = "development"
 
     # CORS settings
     CORS_ORIGINS: list[str] = ["*"]
@@ -19,7 +20,7 @@ class Settings(BaseSettings):
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 5432
     DB_USER: str = "postgres"
-    DB_PASSWORD: str = "duhakeer"
+    DB_PASSWORD: str = ""
     DB_NAME: str = "postgres"
 
     @property
@@ -39,13 +40,15 @@ class Settings(BaseSettings):
 
     # Wiki storage settings (S3/RustFS)
     S3_ENDPOINT_URL: str = "http://localhost:9000"
-    S3_ACCESS_KEY: str = "minioadmin"
-    S3_SECRET_KEY: str = "minioadmin"
+    S3_ACCESS_KEY: str = ""
+    S3_SECRET_KEY: str = ""
     S3_REGION: str = "us-east-1"
     S3_BUCKET_NAME: str = "wiki-bucket"
 
     # JWT authentication secret
-    JWT_SECRET: str = "change-me-in-production"
+    JWT_SECRET: str = ""
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = ""
 
     # RAG settings
     LLM_API_URL: str = "https://api.deepseek.com/v1"
@@ -60,6 +63,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     TOP_K: int = 5
+    RETRIEVAL_MIN_SCORE: float = 0.2
     SYSTEM_PROMPT: str = ""
     # 默认生成温度（安全默认值，管理员可通过请求体覆盖）
     LLM_TEMPERATURE: float = 0.7
@@ -85,6 +89,8 @@ class Settings(BaseSettings):
     MEMORY_EXTRACT_ENABLED: bool = True
     # How many memories to recall and merge into context.
     MEMORY_TOP_K: int = 3
+    MEMORY_MIN_SCORE: float = 0.3
+    MEMORY_MAX_PER_USER_WORKSPACE: int = 200
     # Explicit "remember" phrases that force a memory to be kept (importance=1.0).
     MEMORY_EXPLICIT_KEYWORDS: list[str] = ["记住", "别忘了", "请记住"]
 
@@ -93,6 +99,35 @@ class Settings(BaseSettings):
     # keep False in production and run migrations/0004_add_vector_indexes.sql
     # manually during a low-traffic window instead.
     AUTO_APPLY_VECTOR_INDEXES: bool = False
+
+    def validate_runtime_security(self) -> None:
+        """启动前拒绝缺失凭证，并在生产环境拒绝占位值和弱密钥。"""
+        required = {
+            "DB_PASSWORD": self.DB_PASSWORD,
+            "S3_ACCESS_KEY": self.S3_ACCESS_KEY,
+            "S3_SECRET_KEY": self.S3_SECRET_KEY,
+            "JWT_SECRET": self.JWT_SECRET,
+            "ADMIN_PASSWORD": self.ADMIN_PASSWORD,
+        }
+        missing = [name for name, value in required.items() if not value.strip()]
+        if missing:
+            raise RuntimeError(f"缺少必需的安全配置: {', '.join(sorted(missing))}")
+
+        if self.ENVIRONMENT.lower() != "production":
+            return
+
+        insecure_values = {"admin123", "duhakeer", "minioadmin"}
+        for name, value in required.items():
+            normalized = value.strip().lower()
+            if normalized in insecure_values or "change-me" in normalized or "replace-with" in normalized:
+                raise RuntimeError(f"生产环境禁止使用默认或占位凭证: {name}")
+
+        if len(self.JWT_SECRET) < 32:
+            raise RuntimeError("生产环境 JWT_SECRET 至少需要 32 个字符")
+        if len(self.ADMIN_PASSWORD) < 12:
+            raise RuntimeError("生产环境 ADMIN_PASSWORD 至少需要 12 个字符")
+        if "*" in self.CORS_ORIGINS:
+            raise RuntimeError("生产环境必须显式配置 CORS_ORIGINS，不能使用通配符")
 
     # Redis / Celery 消息队列设置（RAG 入库任务调度）
     REDIS_URL: str = "redis://redis:6379/0"
